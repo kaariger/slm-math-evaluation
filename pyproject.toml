@@ -1,0 +1,14 @@
+[project]
+name = "slm-math-evaluation"
+version = "0.1.0"
+description = "Reproducible evaluation of generative language models on mathematical reasoning tasks."
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = []
+
+[tool.poetry]
+packages = [{ include = "slm_math_evaluation", from = "src" }]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

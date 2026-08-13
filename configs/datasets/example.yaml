@@ -1,0 +1,10 @@
+schema_version: 1
+dataset:
+  id: replace-with-dataset-id
+  revision: replace-with-immutable-revision
+  split: replace-with-split
+  loader: replace-with-loader
+  scorer: replace-with-dataset-specific-scorer
+  reference_method:
+    name: replace-after-reference-selection
+    version: replace-with-immutable-version

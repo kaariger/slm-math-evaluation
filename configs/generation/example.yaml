@@ -1,0 +1,8 @@
+schema_version: 1
+generation:
+  id: replace-with-generation-config-id
+  version: replace-with-version
+  max_new_tokens: replace-with-integer
+  temperature: replace-with-number
+  top_p: replace-with-number
+  seed: replace-with-integer-or-documented-policy
