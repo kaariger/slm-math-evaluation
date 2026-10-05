@@ -5,8 +5,11 @@ the public repository. Priority and design should be refined from evidence.
 
 ## Bootstrap follow-up
 
-- Select and document the first local model runtime after a focused feasibility
-  check; avoid coupling the rest of the evaluator to it.
+- Done: selected pinned llama.cpp with Qwen's official Q4_K_M GGUF after a
+  focused local feasibility check
+  ([decision 0001](docs/decisions/0001-local-qwen-runtime.md)). The production
+  adapter remains part of the first vertical path and must not couple the rest
+  of the evaluator to this runtime.
 - Identify and version the accepted reference method for the first benchmark.
 - Convert configuration templates into validated schemas alongside their first
   real consumers.
