@@ -41,6 +41,8 @@ links or identifiers for auditable per-example evidence. A combined score over
 heterogeneous datasets is out of scope unless a later public decision defines
 and justifies its weighting.
 
-The concrete run schema, model runtime, and first reference harness remain open
-implementation decisions. They must be resolved with evidence from the first
-vertical path rather than assumed by this scaffold.
+The first local model runtime is selected in
+[decision 0001](decisions/0001-local-qwen-runtime.md). The concrete run schema,
+runtime adapter shape, and first reference harness remain open implementation
+decisions. They must be resolved with evidence from the first vertical path
+rather than assumed by the initial scaffold.
