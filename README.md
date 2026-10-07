@@ -1,20 +1,17 @@
 # SLM Math Evaluation
 
-SLM Math Evaluation is an inception-stage project for reproducible evaluation
-of locally runnable generative language models on mathematical reasoning tasks.
-The first implementation milestone will establish one complete evaluation path
-before the project broadens to additional models or datasets.
-
-This repository is moving beyond its initial scaffold. The first local runtime
-has been selected through a focused Qwen3-8B feasibility check, but the runtime
-adapter, datasets, and MATH-500 evaluation are not yet implemented.
+SLM Math Evaluation implements a local Qwen3-8B × MATH-500 evaluation path.
+The pinned dataset, split manifest, keyed llama.cpp runtime, extraction,
+two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
+are available. The protocol files remain proposals until the maintainer
+approves the outstanding runtime parameters. No tier results are included.
 
 ## Repository map
 
 - `configs/`: versionable model, dataset, prompt, and generation templates
 - `docs/`: evaluation methodology, conformance rules, and public decisions
 - `src/slm_math_evaluation/`: Python implementation package
-- `tests/`: dependency-free bootstrap validation tests
+- `tests/`: unit and maintainer-ruled visible specification tests
 - `results/`: curated, reviewable result artifacts only
 - `scripts/validate_public_repo.py`: deterministic public-content leakage check
 - `scripts/validate_runtime_feasibility.py`: local runtime feasibility check;
@@ -22,26 +19,32 @@ adapter, datasets, and MATH-500 evaluation are not yet implemented.
 
 ## First local runtime
 
-The first Qwen3-8B path will use pinned llama.cpp and Qwen's official Q4_K_M
-GGUF. The evidence, exact artifact identities, tradeoffs, and reproduction
-command are recorded in
-[decision 0001](docs/decisions/0001-local-qwen-runtime.md). This selects a
-runtime; it does not implement the production adapter or set the benchmark
-prompt protocol.
+The first Qwen3-8B path uses pinned llama.cpp and Qwen's official Q4_K_M
+GGUF, with an official Q8_0 variant also pinned. Artifact identities and
+feasibility evidence are in
+[decision 0001](docs/decisions/0001-local-qwen-runtime.md).
+The [protocol proposal](docs/math500-protocol-proposal.md) identifies every
+remaining runtime choice and its provenance. `slm-eval run` rejects a draft
+protocol; it can start only after the maintainer freezes an approved version.
+
+The CLI provides `data fetch`, `data build-manifest`, `data show-pair`,
+`data apply-verdicts`, `verify-runtime`, `verify-artifact`, `run`, `run --resume`,
+`rescore`, `sensitivity`, and `report`. The interface and run-store schemas
+are in the [v0.5 contract](docs/math500-interface-contract-v0.5.md).
 
 Local datasets, model weights, caches, databases, logs, and full run artifacts
 are ignored by default. A result belongs under `results/` only after it has
 been deliberately curated with enough provenance to audit the claim.
 
-## Bootstrap verification
+## Verification
 
-Install the dependency-free project environment and run the checks from the
-repository root:
+Install the locked project environment and run the checks from the repository root:
 
 ```bash
 poetry install
 poetry check --lock
 poetry run python -m unittest discover -s tests -v
+poetry run pytest -q tests/visible
 poetry run python scripts/validate_public_repo.py .
 ```
 

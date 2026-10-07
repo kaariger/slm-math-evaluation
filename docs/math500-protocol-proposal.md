@@ -25,8 +25,14 @@ version. The 14,000-token output cap is already maintainer-approved.
 | Top-k, min-p | 20, 0 | vendor-filled | Contract draft defaults. |
 | Presence, repeat penalty | 0, 1 | local-choice | No added penalty in the first path. |
 | Seed | `seed_base + sample_index` | local-choice | Gives each sample a reproducible request seed. |
+| Default seed base, samples per item | 0, 1 (CLI overrides available) | local-choice | Makes a single local run deterministic when the caller omits both flags. |
+| Prompt, system message, examples | `{problem}` followed by a step-by-step and boxed-answer instruction; no system message; zero examples | vendor-filled | Uses the public draft prompt with no additional in-context examples. |
+| Chat response transport | non-streaming `/v1/chat/completions` | local-choice | Preserves the complete raw content in one response; streamed equivalence was checked by the runtime fixture. |
 
 The server starts with the listed runtime settings. The verification fixture
 temporarily uses temperature 0 and a 16-token output cap to compare streamed
-and non-streamed raw content without conducting a benchmark run. Scorer pins
-and extractor version are explicitly pending increment 3 in the drafts.
+and non-streamed raw content without conducting a benchmark run. The extractor
+is `boxed-last-v1` 1.0.0. The primary scorer is the PRM800K grader at dataset
+commit `7ecc794703b2877f63226f2477a49b34f9b25163`; the secondary is
+`math-verify` 0.8.0. These implementation pins do not approve any proposed
+runtime parameter or authorize a tier run.

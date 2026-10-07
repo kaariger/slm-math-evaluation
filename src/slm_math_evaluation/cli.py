@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import data, runtime
+from . import analysis, data, runner, runtime
 
 
 class Parser(argparse.ArgumentParser):
@@ -34,6 +34,24 @@ def parser() -> Parser:
     verify_runtime.add_argument("--protocol", required=True, type=Path)
     verify_artifact = commands.add_parser("verify-artifact")
     verify_artifact.add_argument("--protocol", required=True, type=Path)
+    rescore = commands.add_parser("rescore")
+    rescore.add_argument("--run", required=True)
+    report = commands.add_parser("report")
+    report.add_argument("--run", required=True)
+    report.add_argument("--compare-published", type=float)
+    report.add_argument("--sensitivity", type=Path)
+    report.add_argument("--out-dir", type=Path)
+    sensitivity = commands.add_parser("sensitivity")
+    sensitivity.add_argument("--base", required=True)
+    sensitivity.add_argument("--variant", required=True, action="append")
+    sensitivity.add_argument("--out", required=True, type=Path)
+    run = commands.add_parser("run")
+    run.add_argument("--protocol", type=Path)
+    run.add_argument("--manifest", type=Path)
+    run.add_argument("--tier", choices=("smoke", "validation", "test"))
+    run.add_argument("--k", type=int, default=1)
+    run.add_argument("--seed-base", type=int, default=0)
+    run.add_argument("--resume")
     return root
 
 
@@ -44,6 +62,22 @@ def main(argv: list[str] | None = None) -> int:
             paths = [runtime.verify_runtime(args.protocol)]
         elif args.command == "verify-artifact":
             paths = [runtime.verify_artifact(args.protocol)]
+        elif args.command == "rescore":
+            paths = [analysis.rescore(args.run)]
+        elif args.command == "report":
+            paths = analysis.report(args.run, args.compare_published, args.sensitivity, args.out_dir)
+        elif args.command == "sensitivity":
+            paths = [analysis.sensitivity(args.base, args.variant, args.out)]
+        elif args.command == "run":
+            if args.resume:
+                if args.protocol or args.manifest or args.tier or args.k != 1 or args.seed_base != 0:
+                    raise data.DataError("--resume cannot be combined with run-start options", 3)
+                print(runner.resume(args.resume))
+            else:
+                if not (args.protocol and args.manifest and args.tier):
+                    raise data.DataError("--protocol, --manifest, and --tier are required", 3)
+                print(runner.start(args.protocol, args.manifest, args.tier, args.k, args.seed_base))
+            return 0
         elif args.data_command == "fetch":
             paths = data.fetch()
         elif args.data_command == "build-manifest":

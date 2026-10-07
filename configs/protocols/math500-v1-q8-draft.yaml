@@ -50,10 +50,10 @@
     "max_output_tokens": {"value": 14000, "provenance": "source-known-paper"},
     "seed_policy": {"value": "seed = seed_base + sample_index", "provenance": "local-choice"}
   },
-  "extraction": {"id": "boxed-last-v1", "version": "pending-increment-3"},
+  "extraction": {"id": "boxed-last-v1", "version": "1.0.0"},
   "scorers": {
-    "primary": {"id": "prm800k-grader", "pin": "pending-increment-3"},
-    "secondary": {"id": "math-verify", "pin": "pending-increment-3"}
+    "primary": {"id": "prm800k-grader", "pin": "7ecc794703b2877f63226f2477a49b34f9b25163"},
+    "secondary": {"id": "math-verify", "pin": "0.8.0"}
   },
   "dataset": {
     "source": {
