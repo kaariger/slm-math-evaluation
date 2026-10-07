@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 if not (args.protocol and args.manifest and args.tier):
                     raise data.DataError("--protocol, --manifest, and --tier are required", 3)
-                print(runner.start(args.protocol, args.manifest, args.tier, args.k, args.seed_base))
+                runner.start(args.protocol, args.manifest, args.tier, args.k, args.seed_base)
             return 0
         elif args.data_command == "fetch":
             paths = data.fetch()

@@ -148,6 +148,8 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     metadata = _run_metadata(run_id, protocol, protocol_sha, sha256_bytes(manifest_bytes), tier, k, seed_base)
     write_json(directory / "run.json", metadata)
     (directory / "items.jsonl").touch()
+    # Expose the ID before generation so an interrupted run can be resumed.
+    print(run_id, flush=True)
     _generate(directory, metadata, protocol, manifest, ids, set())
     return run_id
 

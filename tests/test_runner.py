@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -59,11 +61,12 @@ class RunnerFixtureTests(unittest.TestCase):
             raw = "<think>Compute the sum.</think>\\boxed{17}"
             response = {"choices": [{"message": {"content": raw}, "finish_reason": "stop"}],
                         "usage": {"completion_tokens": 12}}
+            submitted_seeds = []
 
             def request(_port, method, _path, _key, payload=None):
                 if method == "GET":
                     return 200, b"{}"
-                self.assertEqual(payload["seed"], 3100)
+                submitted_seeds.append(payload["seed"])
                 return 200, json.dumps(response).encode()
 
             with patch.dict(os.environ, {"SLM_EVAL_RUNS": str(root / "runs")}), \
@@ -80,11 +83,28 @@ class RunnerFixtureTests(unittest.TestCase):
                  patch.object(runner, "_host", return_value={"os": "fixture", "arch": "fixture", "memory_gb": 1}), \
                  patch.object(runner.socket, "socket", _FakeSocket), \
                  patch.object(runner.subprocess, "Popen", _FakeProcess):
-                run_id = runner.start(protocol_path, manifest_path, "smoke", 1, 3100)
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    run_id = runner.start(protocol_path, manifest_path, "smoke", 1, 3100)
                 stored = load_run(run_id)
-            self.assertEqual(stored.metadata["status"], "completed")
-            self.assertEqual(len(stored.items), 1)
-            row = stored.items[0]
+                self.assertEqual(submitted_seeds, [3100])
+                first_line = (stored.directory / "items.jsonl").read_bytes()
+                # Emulate interruption after the first of two requested samples.
+                metadata = stored.metadata
+                metadata["status"] = "interrupted"
+                metadata["k"] = 2
+                metadata["seeds"] = [3100, 3101]
+                metadata["attempts"][0]["status"] = "interrupted"
+                data.write_json(stored.directory / "run.json", metadata)
+                self.assertEqual(runner.resume(run_id), run_id)
+                resumed = load_run(run_id)
+            self.assertEqual(output.getvalue().strip(), run_id)
+            self.assertEqual(submitted_seeds, [3100, 3101])
+            self.assertTrue((resumed.directory / "items.jsonl").read_bytes().startswith(first_line))
+            self.assertEqual(resumed.metadata["status"], "completed")
+            self.assertEqual(len(resumed.metadata["attempts"]), 2)
+            self.assertEqual(len(resumed.items), 2)
+            row = resumed.items[0]
             self.assertEqual(row["raw_output"], raw)
             self.assertEqual(row["extraction"], {"answer": "17", "rule": "boxed_last", "status": "ok"})
             self.assertEqual(row["verdicts"], {"primary": True, "secondary": True})
