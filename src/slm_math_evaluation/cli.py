@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import data
+from . import data, runtime
 
 
 class Parser(argparse.ArgumentParser):
@@ -30,13 +30,21 @@ def parser() -> Parser:
     verdicts.add_argument("--manifest", required=True, type=Path)
     verdicts.add_argument("--verdicts", required=True, type=Path)
     verdicts.add_argument("--flagged", type=Path)
+    verify_runtime = commands.add_parser("verify-runtime")
+    verify_runtime.add_argument("--protocol", required=True, type=Path)
+    verify_artifact = commands.add_parser("verify-artifact")
+    verify_artifact.add_argument("--protocol", required=True, type=Path)
     return root
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         args = parser().parse_args(argv)
-        if args.data_command == "fetch":
+        if args.command == "verify-runtime":
+            paths = [runtime.verify_runtime(args.protocol)]
+        elif args.command == "verify-artifact":
+            paths = [runtime.verify_artifact(args.protocol)]
+        elif args.data_command == "fetch":
             paths = data.fetch()
         elif args.data_command == "build-manifest":
             paths = data.build_manifest(args.out, args.flagged_out)
@@ -52,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
             print(path)
         return 0
     except data.DataError as error:
+        print(error, file=sys.stderr)
+        return error.code
+    except runtime.RuntimeErrorWithCode as error:
         print(error, file=sys.stderr)
         return error.code
     except (OSError, ValueError) as error:

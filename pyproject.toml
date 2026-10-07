@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Reproducible evaluation of generative language models on mathematical reasoning tasks."
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
-dependencies = []
+dependencies = ["pyyaml (>=6.0.2,<7.0.0)"]
 
 [project.scripts]
 slm-eval = "slm_math_evaluation.cli:main"
