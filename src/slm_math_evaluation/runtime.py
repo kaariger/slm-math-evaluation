@@ -21,6 +21,7 @@ from .data import cache_root, runs_root
 BUILD = "b10412"
 COMMIT = "0d0bfcd4fd8828e3e7906b6fc4561725b534511e"
 ALIAS = "qwen3-8b"
+DIAGNOSTIC_LOG_VERBOSITY = 4
 ROUTES = tuple(
     tuple(line.split(" ", 1))
     for line in """GET /health
@@ -159,12 +160,14 @@ def server_arguments(server: Path, model: Path, port: int,
     if (runtime.get("cache_type_k") != "f16" or runtime.get("cache_type_v") != "f16"
             or runtime.get("load_mode") != "mmap" or runtime.get("context_shift") is not False
             or runtime.get("jinja") is not True or runtime.get("reasoning_budget") != -1):
-        raise RuntimeErrorWithCode("unsupported runtime settings in draft protocol", 3)
+        raise RuntimeErrorWithCode("unsupported runtime settings in protocol", 3)
     reasoning = protocol.get("reasoning_mode", {}).get("value")
     if reasoning not in ("hybrid", "forced_think", "forced_non_think"):
         raise RuntimeErrorWithCode("invalid reasoning mode", 3)
     reasoning_arg = {"hybrid": "auto", "forced_think": "on", "forced_non_think": "off"}[reasoning]
     return [str(server), "--model", str(model), "--alias", ALIAS,
+            # Trace startup settings are consumed in memory by the runner.
+            "--log-verbosity", str(DIAGNOSTIC_LOG_VERBOSITY),
             "--host", "127.0.0.1", "--port", str(port),
             "--threads", str(threads), "--threads-batch", str(threads_batch),
             "--batch-size", str(batch_size), "--ubatch-size", str(ubatch_size),

@@ -1,11 +1,12 @@
-# MATH-500 protocol values proposed for maintainer review
+# MATH-500 protocol decisions
 
-The two files in `configs/protocols/` are drafts. They differ only in the
-model artifact and draft version. Neither may be used for a benchmark tier
-until the maintainer approves the remaining values and freezes a new protocol
-version. The 14,000-token output cap is already maintainer-approved.
+The maintainer approved the values below for `configs/protocols/protocol.yaml`
+(`v1`, Q4_K_M) and `configs/protocols/math500-v1-q8.yaml` (`v1-q8`, Q8_0).
+The files differ only in `protocol_version` and `model.artifact`. They remain
+editable on dev tiers until the C2 freeze; a change after this approval needs
+a new protocol version. The coordinator executes runs that start generation.
 
-| Setting | Proposed value | Provenance | Reason |
+| Setting | Approved value | Provenance | Reason |
 |---|---:|---|---|
 | Output cap | 14,000 tokens | source-known-paper | Maintainer-approved literal reading of the paper's “14k”. |
 | Context size | 16,384 tokens | local-choice | Allows the proposed output cap plus a bounded prompt in the first local path. Long prompts could reduce the available output budget. |
@@ -21,18 +22,25 @@ version. The 14,000-token output cap is already maintainer-approved.
 | Model alias | `qwen3-8b` | local-choice | Implements the contract's neutral alias. |
 | Reasoning | hybrid; raw reasoning format | inferred / local-choice | Uses template auto reasoning and leaves generated thinking markers in raw content. |
 | Chat template, reasoning budget | embedded Jinja template, unrestricted (-1) | vendor-filled / local-choice | Uses the GGUF template and leaves the hybrid reasoning budget unrestricted within the overall output cap. |
-| Temperature, top-p | 0.6, 0.95 | source-known-paper | Contract draft defaults; require maintainer approval. |
-| Top-k, min-p | 20, 0 | vendor-filled | Contract draft defaults. |
+| Temperature, top-p | 0.6, 0.95 | source-known-paper | Contract defaults approved by the maintainer. |
+| Top-k, min-p | 20, 0 | vendor-filled | Contract defaults approved by the maintainer. |
 | Presence, repeat penalty | 0, 1 | local-choice | No added penalty in the first path. |
 | Seed | `seed_base + sample_index` | local-choice | Gives each sample a reproducible request seed. |
 | Default seed base, samples per item | 0, 1 (CLI overrides available) | local-choice | Makes a single local run deterministic when the caller omits both flags. |
-| Prompt, system message, examples | `{problem}` followed by a step-by-step and boxed-answer instruction; no system message; zero examples | vendor-filled | Uses the public draft prompt with no additional in-context examples. |
+| Prompt, system message, examples | `{problem}` + `\n\n` + `Please reason step by step, and put your final answer within \boxed{}.`; no system message; zero examples | vendor-filled | The rendered user message must match these bytes exactly. |
 | Chat response transport | non-streaming `/v1/chat/completions` | local-choice | Preserves the complete raw content in one response; streamed equivalence was checked by the runtime fixture. |
+
+The run captures effective server settings in `run.json` before the first
+generation request. The pinned server selects CPU, batch, and HTTP thread counts
+at startup. Trace verbosity 4 is used solely to read those startup values;
+the log is drained in memory and discarded. The keyed `/props` endpoint verifies
+context size, slot count, alias, and disabled UI. An unavailable or discrepant
+setting stops generation. Each attempt records its own effective settings,
+including the selected port and actual GPU layer offload.
 
 The server starts with the listed runtime settings. The verification fixture
 temporarily uses temperature 0 and a 16-token output cap to compare streamed
 and non-streamed raw content without conducting a benchmark run. The extractor
 is `boxed-last-v1` 1.0.0. The primary scorer is the PRM800K grader at dataset
 commit `7ecc794703b2877f63226f2477a49b34f9b25163`; the secondary is
-`math-verify` 0.8.0. These implementation pins do not approve any proposed
-runtime parameter or authorize a tier run.
+`math-verify` 0.8.0. These pins are part of the approved protocol files.

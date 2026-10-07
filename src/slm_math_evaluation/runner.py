@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import secrets
 import socket
 import subprocess
 import time
+from threading import Lock, Thread
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -84,7 +86,7 @@ def _source_rows(manifest: dict[str, Any], ids: list[str]) -> dict[str, dict[str
 
 def _protocol_check(protocol: dict[str, Any]) -> None:
     if protocol.get("draft_status"):
-        raise DataError("protocol remains proposed; maintainer must freeze runtime parameters", 3)
+        raise DataError("protocol remains a draft", 3)
     if (protocol.get("extraction") != {"id": EXTRACTOR_ID, "version": EXTRACTOR_VERSION}
             or protocol.get("scorers", {}).get("primary") != {
                 "id": "prm800k-grader", "pin": PRIMARY_PIN}
@@ -196,6 +198,112 @@ def _check_runtime_version(server: Path) -> None:
         raise DataError("runtime build identity mismatch", 2)
 
 
+class _StartupDiagnostics:
+    """Drain server output without retaining paths, prompts, keys, or raw log lines."""
+
+    def __init__(self, stream: Any) -> None:
+        self.values: dict[str, Any] = {}
+        self._lock = Lock()
+        self._thread = Thread(target=self._read, args=(stream,), daemon=True)
+        self._thread.start()
+
+    def _read(self, stream: Any) -> None:
+        patterns = {
+            "http_threads": r"using (\d+) threads for HTTP server",
+            "context_size": r"llama_context:\s+n_ctx\s*=\s*(\d+)",
+            "batch_size": r"llama_context:\s+n_batch\s*=\s*(\d+)",
+            "ubatch_size": r"llama_context:\s+n_ubatch\s*=\s*(\d+)",
+            "parallel_slots": r"llama_context:\s+n_seq_max\s*=\s*(\d+)",
+        }
+        try:
+            for raw in stream:
+                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+                observed: dict[str, Any] = {}
+                threads = re.search(r"system_info: n_threads = (\d+) \(n_threads_batch = (\d+)\)", line)
+                if threads:
+                    observed.update(threads=int(threads[1]), threads_batch=int(threads[2]))
+                for name, pattern in patterns.items():
+                    found = re.search(pattern, line)
+                    if found:
+                        observed[name] = int(found[1])
+                gpu = re.search(r"offloaded (\d+)/(\d+) layers to GPU", line)
+                if gpu:
+                    observed.update(gpu_layers_offloaded=int(gpu[1]), gpu_layers_total=int(gpu[2]))
+                flash = re.search(r"llama_context:\s+flash_attn\s*=\s*(enabled|disabled)", line)
+                if flash:
+                    observed["flash_attention"] = flash[1] == "enabled"
+                cache = re.search(r"K \((\w+)\).*V \((\w+)\)", line)
+                if cache and "llama_kv_cache:" in line:
+                    observed.update(cache_type_k=cache[1], cache_type_v=cache[2])
+                if observed:
+                    with self._lock:
+                        self.values.update(observed)
+        finally:
+            stream.close()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self.values)
+
+    def join(self) -> None:
+        self._thread.join(timeout=2)
+
+
+def _effective_settings(protocol: dict[str, Any], port: int, key: str,
+                        diagnostics: _StartupDiagnostics) -> dict[str, Any]:
+    required = {"threads", "threads_batch", "http_threads", "context_size",
+                "batch_size", "ubatch_size", "parallel_slots", "flash_attention",
+                "cache_type_k", "cache_type_v", "gpu_layers_offloaded", "gpu_layers_total"}
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        observed = diagnostics.snapshot()
+        if required <= observed.keys():
+            break
+        time.sleep(.05)
+    else:
+        missing = sorted(required - diagnostics.snapshot().keys())
+        raise DataError(f"effective runtime settings unavailable: {', '.join(missing)}", 3)
+    status, body = runtime.request(port, "GET", "/props", key)
+    if status != 200:
+        raise DataError("keyed runtime properties unavailable", 3)
+    try:
+        props = json.loads(body)
+        prop_values = {"context_size": props["default_generation_settings"]["n_ctx"],
+                       "parallel_slots": props["total_slots"], "model_alias": props["model_alias"],
+                       "ui": props["ui"]}
+    except (ValueError, KeyError, TypeError) as error:
+        raise DataError("keyed runtime properties incomplete", 3) from error
+    configured = protocol["runtime"]
+    for name in ("context_size", "batch_size", "ubatch_size", "parallel_slots",
+                 "flash_attention", "cache_type_k", "cache_type_v"):
+        if observed[name] != configured[name]:
+            raise DataError(f"effective runtime setting differs: {name}", 2)
+    for name, value in prop_values.items():
+        if observed.get(name, configured.get(name)) != value or configured[name] != value:
+            raise DataError(f"runtime properties differ: {name}", 2)
+    if (min(observed["threads"], observed["threads_batch"], observed["http_threads"]) <= 0
+            or not 0 <= observed["gpu_layers_offloaded"] <= observed["gpu_layers_total"]
+            or observed["gpu_layers_total"] > configured["gpu_layers"]):
+        raise DataError("invalid runtime-selected thread or GPU layer count", 2)
+    effective = {name: value for name, value in configured.items() if name != "provenance"}
+    effective.update(observed)
+    effective["port"] = port
+    effective["requested_gpu_layers"] = configured["gpu_layers"]
+    effective["gpu_layers"] = observed["gpu_layers_offloaded"]
+    effective["log_verbosity"] = runtime.DIAGNOSTIC_LOG_VERBOSITY
+    effective["reasoning_mode"] = protocol["reasoning_mode"]["value"]
+    effective["request_sampling"] = {
+        name: setting["value"] for name, setting in protocol["sampling"].items()
+        if name != "seed_policy"
+    }
+    effective["generation_endpoint"] = "/v1/chat/completions"
+    effective["stream"] = False
+    effective["evidence"] = {"auto_selected": "startup diagnostics",
+                             "context_and_slots": "keyed /props",
+                             "other_settings": "explicit server arguments"}
+    return effective
+
+
 def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any],
               manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]]) -> None:
     server, model = runtime.pinned_paths(protocol)
@@ -215,7 +323,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
     metadata["attempts"].append(attempt)
     write_json(directory / "run.json", metadata)
     process = subprocess.Popen(arguments, env=environment, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    diagnostics = _StartupDiagnostics(process.stdout)
     try:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
@@ -229,6 +338,10 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
             time.sleep(.5)
         else:
             raise DataError("runtime did not become healthy", 3)
+        effective = _effective_settings(protocol, port, key, diagnostics)
+        attempt["effective_runtime_settings"] = effective
+        metadata["effective_runtime_settings"] = effective
+        write_json(directory / "run.json", metadata)
         rows = _source_rows(manifest, ids)
         settings = {name: protocol["sampling"][name]["value"] for name in
                     ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty")}
@@ -284,5 +397,6 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
+        diagnostics.join()
         attempt["ended"] = _utc()
         write_json(directory / "run.json", metadata)

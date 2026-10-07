@@ -3,8 +3,8 @@
 SLM Math Evaluation implements a local Qwen3-8B × MATH-500 evaluation path.
 The pinned dataset, split manifest, keyed llama.cpp runtime, extraction,
 two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
-are available. The protocol files remain proposals until the maintainer
-approves the outstanding runtime parameters. No tier results are included.
+are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved for
+dev-tier use until the C2 freeze. No tier results are included.
 
 ## Repository map
 
@@ -23,9 +23,10 @@ The first Qwen3-8B path uses pinned llama.cpp and Qwen's official Q4_K_M
 GGUF, with an official Q8_0 variant also pinned. Artifact identities and
 feasibility evidence are in
 [decision 0001](docs/decisions/0001-local-qwen-runtime.md).
-The [protocol proposal](docs/math500-protocol-proposal.md) identifies every
-remaining runtime choice and its provenance. `slm-eval run` rejects a draft
-protocol; it can start only after the maintainer freezes an approved version.
+The [protocol decisions](docs/math500-protocol-proposal.md) identify runtime
+choices and their provenance. `slm-eval run` accepts the approved files after
+runtime and artifact verification records have been created for their hashes.
+Runs that start generation are executed by the coordinator.
 
 The CLI provides `data fetch`, `data build-manifest`, `data show-pair`,
 `data apply-verdicts`, `verify-runtime`, `verify-artifact`, `run`, `run --resume`,
