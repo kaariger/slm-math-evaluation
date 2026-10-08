@@ -3,27 +3,27 @@
 This backlog tracks implementation work that is safe and useful to discuss in
 the public repository. Priority and design should be refined from evidence.
 
-## Bootstrap follow-up
+## Implemented vertical path
 
 - Done: selected pinned llama.cpp with Qwen's official Q4_K_M GGUF after a
   focused local feasibility check
-  ([decision 0001](docs/decisions/0001-local-qwen-runtime.md)). The production
-  adapter remains part of the first vertical path and must not couple the rest
-  of the evaluator to this runtime.
-- Identify and version the accepted reference method for the first benchmark.
-- Convert configuration templates into validated schemas alongside their first
-  real consumers.
-- Define the smallest retained-run manifest and artifact layout that satisfies
-  provenance and audit requirements.
+  ([decision 0001](docs/decisions/0001-local-qwen-runtime.md)). The implemented
+  runtime boundary keeps model-specific behavior separate from scoring and
+  reporting.
+- Implemented pinned dataset loading, manifest construction, flagged-pair
+  verdicts, and dev tiers.
+- Implemented the approved Q4 and Q8 protocols, keyed local runtime boundary,
+  prompt construction, and raw generation capture.
+- Implemented answer extraction, two scorers, per-example evidence, rescore,
+  per-dataset reporting, and sensitivity analysis.
 
-## First vertical path
+## Next evaluation work
 
-- Implement dataset loading and canonical examples.
-- Implement prompt construction and raw generation capture.
-- Add a narrow model runtime boundary for the first model.
-- Implement answer extraction and dataset-specific scoring.
-- Produce per-example evidence and a per-dataset report.
-- Compare the native path with the selected reference method.
+- Execute and retain complete tier runs with per-item evidence.
+- Curate a result only after protocol, dataset, runtime, and scorer identities
+  have been verified against its retained artifacts.
+- Identify and version a reference method before any separate conformance
+  comparison. Reference conformance is outside the current native path.
 
 ## After the first path
 

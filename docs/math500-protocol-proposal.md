@@ -2,9 +2,9 @@
 
 The maintainer approved the values below for `configs/protocols/protocol.yaml`
 (`v1`, Q4_K_M) and `configs/protocols/math500-v1-q8.yaml` (`v1-q8`, Q8_0).
-The files differ only in `protocol_version` and `model.artifact`. They remain
-editable on dev tiers until the C2 freeze; a change after this approval needs
-a new protocol version. The coordinator executes runs that start generation.
+The files differ only in `protocol_version` and `model.artifact`. Their version
+names identify these exact files. Dev-tier experiments may use a separately
+versioned protocol; an approved version is never silently rewritten.
 
 | Setting | Approved value | Provenance | Reason |
 |---|---:|---|---|
@@ -30,13 +30,15 @@ a new protocol version. The coordinator executes runs that start generation.
 | Prompt, system message, examples | `{problem}` + `\n\n` + `Please reason step by step, and put your final answer within \boxed{}.`; no system message; zero examples | vendor-filled | The rendered user message must match these bytes exactly. |
 | Chat response transport | non-streaming `/v1/chat/completions` | local-choice | Preserves the complete raw content in one response; streamed equivalence was checked by the runtime fixture. |
 
-The run captures effective server settings in `run.json` before the first
-generation request. The pinned server selects CPU, batch, and HTTP thread counts
-at startup. Trace verbosity 4 is used solely to read those startup values;
-the log is drained in memory and discarded. The keyed `/props` endpoint verifies
-context size, slot count, alias, and disabled UI. An unavailable or discrepant
-setting stops generation. Each attempt records its own effective settings,
-including the selected port and actual GPU layer offload.
+The harness resolves approved auto CPU, batch, and HTTP thread settings to
+explicit server arguments and records the effective values in `run.json` before
+generation. Trace logging is disabled because the pinned server prints a key
+fragment at trace level. The keyed `/props` endpoint verifies context size,
+slot count, alias, and disabled UI. Keyed `/slots` confirms each generation
+request's sampling values and seed; mismatches stop the run. Each attempt
+records its effective settings and confirmed sampling. A generation request's
+read timeout is 120 seconds plus the 14,000-token cap divided by the 10
+tokens/second feasibility floor (1,520 seconds for the approved cap).
 
 The server starts with the listed runtime settings. The verification fixture
 temporarily uses temperature 0 and a 16-token output cap to compare streamed

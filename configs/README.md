@@ -1,13 +1,11 @@
 # Configuration
 
-Evaluation inputs are separated so a material change can create a new,
-identifiable run rather than silently rewriting an old result:
+- `protocols/protocol.yaml`: approved Q4_K_M `v1` protocol.
+- `protocols/math500-v1-q8.yaml`: approved Q8_0 `v1-q8` protocol.
+- `datasets/math500-manifest-v1.json`: frozen MATH-500 membership and dev tiers.
+- `datasets/flagged-verdicts-v1.json`: maintainer verdicts for the 16 flagged dev pairs.
 
-- `models/`: model identity, immutable revision, and runtime-bound settings
-- `datasets/`: dataset identity, split, revision, loader, and scorer
-- `prompts/`: versioned prompt protocol and answer-format instructions
-- `generation/`: versioned decoding settings and seed policy
-
-The current files are design templates, not runnable configurations. Fields and
-validation should be finalized alongside the first real vertical path, after a
-local runtime and reference method have been explicitly selected.
+The protocol files contain model, dataset, prompt, generation, extraction, and
+scoring settings. A change to an approved protocol requires a new version.
+The old placeholder templates were removed because they were not runnable and
+no command reads them.

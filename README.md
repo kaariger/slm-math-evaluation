@@ -3,15 +3,15 @@
 SLM Math Evaluation implements a local Qwen3-8B × MATH-500 evaluation path.
 The pinned dataset, split manifest, keyed llama.cpp runtime, extraction,
 two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
-are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved for
-dev-tier use until the C2 freeze. No tier results are included.
+are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved;
+any revision requires a new version. No tier results are included.
 
 ## Repository map
 
 - `configs/`: versionable model, dataset, prompt, and generation templates
 - `docs/`: evaluation methodology, conformance rules, and public decisions
 - `src/slm_math_evaluation/`: Python implementation package
-- `tests/`: unit and maintainer-ruled visible specification tests
+- `tests/`: unit and visible specification tests
 - `results/`: curated, reviewable result artifacts only
 - `scripts/validate_public_repo.py`: deterministic public-content leakage check
 - `scripts/validate_runtime_feasibility.py`: local runtime feasibility check;
@@ -26,12 +26,12 @@ feasibility evidence are in
 The [protocol decisions](docs/math500-protocol-proposal.md) identify runtime
 choices and their provenance. `slm-eval run` accepts the approved files after
 runtime and artifact verification records have been created for their hashes.
-Runs that start generation are executed by the coordinator.
+Generation runs require matching runtime and artifact verification records.
 
 The CLI provides `data fetch`, `data build-manifest`, `data show-pair`,
 `data apply-verdicts`, `verify-runtime`, `verify-artifact`, `run`, `run --resume`,
 `rescore`, `sensitivity`, and `report`. The interface and run-store schemas
-are in the [v0.5 contract](docs/math500-interface-contract-v0.5.md).
+are in the [v0.6 contract](docs/math500-interface-contract-v0.6.md).
 
 Local datasets, model weights, caches, databases, logs, and full run artifacts
 are ignored by default. A result belongs under `results/` only after it has

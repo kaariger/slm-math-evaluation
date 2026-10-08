@@ -18,15 +18,6 @@ from slm_math_evaluation.run_store import load_run
 class _FakeProcess:
     def __init__(self, *args, **kwargs):
         self.stopped = False
-        self.stdout = io.BytesIO(b"system_info: n_threads = 8 (n_threads_batch = 8) / 8\n"
-                                 b"srv init: using 7 threads for HTTP server\n"
-                                 b"load_tensors: offloaded 37/37 layers to GPU\n"
-                                 b"llama_context: n_seq_max = 1\n"
-                                 b"llama_context: n_ctx = 16384\n"
-                                 b"llama_context: n_batch = 2048\n"
-                                 b"llama_context: n_ubatch = 512\n"
-                                 b"llama_context: flash_attn = enabled\n"
-                                 b"llama_kv_cache: K (f16): 100 V (f16): 100\n")
 
     def poll(self):
         return 0 if self.stopped else None
@@ -53,6 +44,14 @@ class _FakeSocket:
 
 
 class RunnerFixtureTests(unittest.TestCase):
+    def test_nonzero_few_shot_is_rejected(self):
+        protocol = json.loads((Path(__file__).parents[1] /
+                               "configs/protocols/protocol.yaml").read_text())
+        protocol["prompt"]["few_shot"] = 1
+        with self.assertRaises(data.DataError) as caught:
+            runner._protocol_check(protocol)
+        self.assertEqual(caught.exception.code, 3)
+
     def test_approved_protocols_render_exact_user_message(self):
         root = Path(__file__).parents[1] / "configs/protocols"
         q4 = json.loads((root / "protocol.yaml").read_text())
@@ -79,6 +78,10 @@ class RunnerFixtureTests(unittest.TestCase):
             protocol = json.loads((Path(__file__).parents[1] / "configs/protocols/protocol.yaml").read_text())
             protocol_path = root / "protocol.yaml"
             protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+            verification = json.dumps({"protocol_sha256": data.sha256_file(protocol_path),
+                                       "model_artifact_sha256": protocol["model"]["artifact"]["sha256"],
+                                       "runtime_build": protocol["runtime"]["build"],
+                                       "contract_version": "v0.6", "status": "passed"}).encode()
             problem = "What is 8 + 9?"
             manifest = {"source": protocol["dataset"]["source"],
                         "items": [{"id": "train/fixture", "role": "dev",
@@ -90,26 +93,33 @@ class RunnerFixtureTests(unittest.TestCase):
             response = {"choices": [{"message": {"content": raw}, "finish_reason": "stop"}],
                         "usage": {"completion_tokens": 12}}
             submitted_seeds = []
+            last_params = {}
 
-            def request(_port, method, _path, _key, payload=None):
+            def request(_port, method, _path, _key, payload=None, **_kwargs):
                 if method == "GET":
                     if _path == "/props":
                         return 200, json.dumps({"default_generation_settings": {"n_ctx": 16384},
                                                 "total_slots": 1, "model_alias": "qwen3-8b",
                                                 "ui": False}).encode()
+                    if _path == "/slots":
+                        return 200, json.dumps([{"params": {**last_params,
+                                                               "n_predict": last_params["max_tokens"]}}]).encode()
                     return 200, b"{}"
                 submitted_seeds.append(payload["seed"])
+                last_params.update({name: payload[name] for name in runner.runtime.SAMPLING_FIELDS})
                 return 200, json.dumps(response).encode()
 
             with patch.dict(os.environ, {"SLM_EVAL_RUNS": str(root / "runs")}), \
                  patch.object(runner, "_verification_copies", return_value={
-                     "runtime-verification.json": b"{}", "artifact-verification.json": b"{}"}), \
+                     "runtime-verification.json": verification,
+                     "artifact-verification.json": verification}) as verification_mock, \
                  patch.object(runner, "_source_rows", return_value={
                      "train/fixture": {"unique_id": "train/fixture", "problem": problem, "answer": "17"}}), \
                  patch.object(runner.runtime, "pinned_paths", return_value=(root / "server", root / "model")), \
                  patch.object(runner.runtime, "sha256_file", side_effect=lambda path: (
                      data.sha256_file(path) if path == protocol_path else protocol["model"]["artifact"]["sha256"])), \
-                 patch.object(runner.runtime, "server_arguments", return_value=["server"]), \
+                 patch.object(runner.runtime, "server_arguments", return_value=[
+                     "server", "--threads", "8", "--threads-batch", "8", "--threads-http", "7"]), \
                  patch.object(runner, "_check_runtime_version"), \
                  patch.object(runner.runtime, "request", side_effect=request), \
                  patch.object(runner, "_host", return_value={"os": "fixture", "arch": "fixture", "memory_gb": 1}), \
@@ -128,6 +138,9 @@ class RunnerFixtureTests(unittest.TestCase):
                 metadata["seeds"] = [3100, 3101]
                 metadata["attempts"][0]["status"] = "interrupted"
                 data.write_json(stored.directory / "run.json", metadata)
+                # A later verification uses a new ephemeral port and changes
+                # the current record; resume relies on the retained copy.
+                verification_mock.side_effect = AssertionError("current verification store read on resume")
                 self.assertEqual(runner.resume(run_id), run_id)
                 resumed = load_run(run_id)
             self.assertEqual(output.getvalue().strip(), run_id)
@@ -140,9 +153,11 @@ class RunnerFixtureTests(unittest.TestCase):
                 self.assertEqual(effective["threads"], 8)
                 self.assertEqual(effective["threads_batch"], 8)
                 self.assertEqual(effective["http_threads"], 7)
-                self.assertEqual(effective["gpu_layers_offloaded"], 37)
-                self.assertEqual(effective["requested_gpu_layers"], 99)
+                self.assertEqual(effective["gpu_layers"], 99)
                 self.assertEqual(effective["context_size"], 16384)
+                self.assertFalse(effective["trace_logging"])
+                self.assertEqual(attempt["confirmed_request_sampling"]["max_tokens"], 14000)
+                self.assertGreater(attempt["generation_timeout_seconds"], 600)
             self.assertEqual(len(resumed.items), 2)
             row = resumed.items[0]
             self.assertEqual(row["raw_output"], raw)

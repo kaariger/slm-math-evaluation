@@ -1,9 +1,0 @@
-schema_version: 1
-prompt:
-  id: replace-with-prompt-id
-  version: replace-with-version
-  template: |-
-    Solve the following problem and provide a final answer.
-
-    {problem}
-  answer_format: replace-with-explicit-answer-format

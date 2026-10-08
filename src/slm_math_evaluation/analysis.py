@@ -5,11 +5,13 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
 from .data import DataError, read_json, write_json
-from .evaluation import extract_raw, score_primary, score_secondary
+from .evaluation import (EXTRACTOR_ID, EXTRACTOR_VERSION, PRIMARY_PIN,
+                         SECONDARY_PIN, extract_raw, score_primary, score_secondary)
 from .run_store import StoredRun, load_run, write_text
 
 
@@ -17,8 +19,26 @@ BOOTSTRAP_SEED = 4242
 BOOTSTRAP_RESAMPLES = 2000
 
 
+def _method_identities(run: StoredRun) -> tuple[dict[str, str], list[dict[str, str]]]:
+    extractor = {"id": EXTRACTOR_ID, "version": EXTRACTOR_VERSION}
+    scorers = [{"id": "prm800k-grader", "pin": PRIMARY_PIN},
+               {"id": "math-verify", "pin": SECONDARY_PIN}]
+    declared = [run.protocol.get("scorers", {}).get(role) for role in ("primary", "secondary")]
+    if (run.protocol.get("extraction") != extractor or run.metadata.get("extractor") != extractor
+            or declared != scorers or run.metadata.get("scorers") != scorers):
+        raise DataError("run extractor or scorer identity/version differs from implementation", 2)
+    try:
+        installed = version("math-verify")
+    except PackageNotFoundError as error:
+        raise DataError("pinned math-verify package is not installed", 3) from error
+    if installed != SECONDARY_PIN:
+        raise DataError("installed math-verify version differs from run scorer pin", 2)
+    return extractor, scorers
+
+
 def rescore(run_id: str) -> Path:
     run = load_run(run_id)
+    extractor, scorers = _method_identities(run)
     records = []
     for row in sorted(run.items, key=lambda item: (item["item_id"], item["sample_index"])):
         _, extraction = extract_raw(row["raw_output"], row["truncated"])
@@ -32,6 +52,7 @@ def rescore(run_id: str) -> Path:
                         "stored": stored, "recomputed": recomputed, "match": stored == recomputed})
     output = run.directory / "rescore.json"
     write_json(output, {"rescore_version": "1", "run_id": run_id,
+                        "extractor": extractor, "scorers": scorers,
                         "all_match": all(row["match"] for row in records), "records": records})
     return output
 
@@ -129,6 +150,7 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     if published is not None and (not math.isfinite(published) or not 0 <= published <= 1):
         raise DataError("published value must be a fraction in [0, 1]", 3)
     run = load_run(run_id)
+    extractor, scorer_identities = _method_identities(run)
     sensitivity = read_json(sensitivity_path) if sensitivity_path else None
     if sensitivity is not None and (sensitivity.get("sensitivity_version") != "1"
                                     or sensitivity.get("base_run") != run_id
@@ -138,6 +160,10 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     secondary = _scorer_summary(run, "secondary")
     rows = run.items
     count = len(rows)
+    tier = run.metadata["tier"]
+    tier_ids = ([item["id"] for item in run.manifest["items"] if item["role"] == "test"]
+                if tier == "test" else run.manifest.get("tiers", {}).get(tier, []))
+    expected_count = len(tier_ids) * run.metadata["k"]
     counts = {
         "format_failures": sum(row["extraction"]["status"] == "no_answer" and not row["truncated"] for row in rows),
         "truncations": sum(bool(row["truncated"]) for row in rows),
@@ -147,9 +173,14 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     }
     document: dict[str, Any] = {
         "report_version": "1", "run_id": run_id, "tier": run.metadata["tier"],
-        "k": run.metadata["k"], "protocol_sha256": run.metadata["protocol_sha256"],
+        "k": run.metadata["k"], "protocol_version": run.metadata["protocol_version"],
+        "run_status": run.metadata["status"],
+        "completeness": {"observed_items": count, "expected_items": expected_count,
+                         "complete": run.metadata["status"] == "completed" and count == expected_count},
+        "protocol_sha256": run.metadata["protocol_sha256"],
         "manifest_sha256": run.metadata["manifest_sha256"],
         "scorers": {"primary": primary, "secondary": secondary}, "counts": counts,
+        "extractor": extractor, "scorer_identities": scorer_identities,
         "protocol_provenance": _provenance(run.protocol),
         "deviations": run.protocol.get("deviations", []),
         "interpretation": "Best-effort reproduction under a reconstructed public protocol; original protocol unknown.",
@@ -163,6 +194,11 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     json_path, md_path = output_dir / "report.json", output_dir / "report.md"
     lines = [f"# Evaluation report: {run_id}", "",
              f"Tier: {run.metadata['tier']}; samples per item: {run.metadata['k']}", "",
+             f"Protocol version: {run.metadata['protocol_version']}; "
+             f"run status: {run.metadata['status']}; items: {count}/{expected_count}", "",
+             f"Extractor: {extractor['id']} {extractor['version']}; "
+             f"scorers: {scorer_identities[0]['id']}@{scorer_identities[0]['pin']}, "
+             f"{scorer_identities[1]['id']}@{scorer_identities[1]['pin']}", "",
              "| Scorer | Accuracy | 95% interval |", "| --- | ---: | --- |",
              f"| Primary | {primary['accuracy']:.6f} | {primary['interval_95']} |",
              f"| Secondary | {secondary['accuracy']:.6f} | {secondary['interval_95']} |", "",

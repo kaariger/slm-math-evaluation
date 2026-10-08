@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 import os
 import platform
-import re
 import secrets
 import socket
 import subprocess
 import time
-from threading import Lock, Thread
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,20 +34,27 @@ def _verification_copies(protocol_sha: str, protocol: dict[str, Any]) -> dict[st
     copies = {}
     for name in ("runtime-verification.json", "artifact-verification.json"):
         path = directory / name
-        if not path.is_file():
-            raise DataError(f"verification record missing: {path}", 3)
-        content = path.read_bytes()
-        try:
-            record = json.loads(content)
-        except json.JSONDecodeError as error:
-            raise DataError(f"invalid verification record: {path}", 2) from error
-        if (record.get("protocol_sha256") != protocol_sha
-                or record.get("model_artifact_sha256") != protocol["model"]["artifact"]["sha256"]
-                or record.get("runtime_build") != protocol["runtime"]["build"]
-                or record.get("status") != "passed"):
-            raise DataError(f"verification record identity/status mismatch: {path}", 2)
-        copies[name] = content
+        copies[name] = _verified_record(path, name, protocol_sha, protocol)
     return copies
+
+
+def _verified_record(path: Path, name: str, protocol_sha: str,
+                     protocol: dict[str, Any]) -> bytes:
+    if not path.is_file():
+        raise DataError(f"verification record missing: {path}", 3)
+    content = path.read_bytes()
+    try:
+        record = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise DataError(f"invalid verification record: {path}", 2) from error
+    if (record.get("protocol_sha256") != protocol_sha
+            or record.get("model_artifact_sha256") != protocol["model"]["artifact"]["sha256"]
+            or record.get("runtime_build") != protocol["runtime"]["build"]
+            or record.get("status") != "passed"
+            or (name == "runtime-verification.json"
+                and record.get("contract_version") != "v0.6")):
+        raise DataError(f"verification record identity/status mismatch: {path}", 2)
+    return content
 
 
 def _identity(protocol: dict[str, Any], manifest: dict[str, Any], tier: str) -> list[str]:
@@ -96,6 +101,8 @@ def _protocol_check(protocol: dict[str, Any]) -> None:
     seed_policy = protocol.get("sampling", {}).get("seed_policy", {}).get("value")
     if seed_policy != "seed = seed_base + sample_index":
         raise DataError("unsupported seed policy", 3)
+    if protocol.get("prompt", {}).get("few_shot") != 0:
+        raise DataError("few-shot examples are unsupported by this prompt renderer", 3)
 
 
 def _host() -> dict[str, Any]:
@@ -161,10 +168,9 @@ def resume(run_id: str) -> str:
     if run.metadata.get("status") == "completed":
         raise DataError("completed run is immutable", 3)
     _protocol_check(run.protocol)
-    expected = _verification_copies(run.metadata["protocol_sha256"], run.protocol)
-    for name, content in expected.items():
-        if (run.directory / name).read_bytes() != content:
-            raise DataError(f"verification copy changed: {name}", 2)
+    for name in ("runtime-verification.json", "artifact-verification.json"):
+        _verified_record(run.directory / name, name, run.metadata["protocol_sha256"],
+                         run.protocol)
     if (run.metadata["model_artifact_sha256"] != run.protocol["model"]["artifact"]["sha256"]
             or run.metadata["runtime_build"] != run.protocol["runtime"]["build"]
             or run.metadata["protocol_version"] != run.protocol["protocol_version"]):
@@ -198,71 +204,11 @@ def _check_runtime_version(server: Path) -> None:
         raise DataError("runtime build identity mismatch", 2)
 
 
-class _StartupDiagnostics:
-    """Drain server output without retaining paths, prompts, keys, or raw log lines."""
-
-    def __init__(self, stream: Any) -> None:
-        self.values: dict[str, Any] = {}
-        self._lock = Lock()
-        self._thread = Thread(target=self._read, args=(stream,), daemon=True)
-        self._thread.start()
-
-    def _read(self, stream: Any) -> None:
-        patterns = {
-            "http_threads": r"using (\d+) threads for HTTP server",
-            "context_size": r"llama_context:\s+n_ctx\s*=\s*(\d+)",
-            "batch_size": r"llama_context:\s+n_batch\s*=\s*(\d+)",
-            "ubatch_size": r"llama_context:\s+n_ubatch\s*=\s*(\d+)",
-            "parallel_slots": r"llama_context:\s+n_seq_max\s*=\s*(\d+)",
-        }
-        try:
-            for raw in stream:
-                line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
-                observed: dict[str, Any] = {}
-                threads = re.search(r"system_info: n_threads = (\d+) \(n_threads_batch = (\d+)\)", line)
-                if threads:
-                    observed.update(threads=int(threads[1]), threads_batch=int(threads[2]))
-                for name, pattern in patterns.items():
-                    found = re.search(pattern, line)
-                    if found:
-                        observed[name] = int(found[1])
-                gpu = re.search(r"offloaded (\d+)/(\d+) layers to GPU", line)
-                if gpu:
-                    observed.update(gpu_layers_offloaded=int(gpu[1]), gpu_layers_total=int(gpu[2]))
-                flash = re.search(r"llama_context:\s+flash_attn\s*=\s*(enabled|disabled)", line)
-                if flash:
-                    observed["flash_attention"] = flash[1] == "enabled"
-                cache = re.search(r"K \((\w+)\).*V \((\w+)\)", line)
-                if cache and "llama_kv_cache:" in line:
-                    observed.update(cache_type_k=cache[1], cache_type_v=cache[2])
-                if observed:
-                    with self._lock:
-                        self.values.update(observed)
-        finally:
-            stream.close()
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._lock:
-            return dict(self.values)
-
-    def join(self) -> None:
-        self._thread.join(timeout=2)
-
-
 def _effective_settings(protocol: dict[str, Any], port: int, key: str,
-                        diagnostics: _StartupDiagnostics) -> dict[str, Any]:
-    required = {"threads", "threads_batch", "http_threads", "context_size",
-                "batch_size", "ubatch_size", "parallel_slots", "flash_attention",
-                "cache_type_k", "cache_type_v", "gpu_layers_offloaded", "gpu_layers_total"}
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        observed = diagnostics.snapshot()
-        if required <= observed.keys():
-            break
-        time.sleep(.05)
-    else:
-        missing = sorted(required - diagnostics.snapshot().keys())
-        raise DataError(f"effective runtime settings unavailable: {', '.join(missing)}", 3)
+                        arguments: list[str]) -> dict[str, Any]:
+    def argument(name: str) -> int:
+        return int(arguments[arguments.index(name) + 1])
+
     status, body = runtime.request(port, "GET", "/props", key)
     if status != 200:
         raise DataError("keyed runtime properties unavailable", 3)
@@ -274,23 +220,18 @@ def _effective_settings(protocol: dict[str, Any], port: int, key: str,
     except (ValueError, KeyError, TypeError) as error:
         raise DataError("keyed runtime properties incomplete", 3) from error
     configured = protocol["runtime"]
-    for name in ("context_size", "batch_size", "ubatch_size", "parallel_slots",
-                 "flash_attention", "cache_type_k", "cache_type_v"):
-        if observed[name] != configured[name]:
-            raise DataError(f"effective runtime setting differs: {name}", 2)
+    selected = {"threads": argument("--threads"),
+                "threads_batch": argument("--threads-batch"),
+                "http_threads": argument("--threads-http")}
+    if min(selected.values()) < 1:
+        raise DataError("invalid explicit runtime thread count", 2)
     for name, value in prop_values.items():
-        if observed.get(name, configured.get(name)) != value or configured[name] != value:
+        if configured[name] != value:
             raise DataError(f"runtime properties differ: {name}", 2)
-    if (min(observed["threads"], observed["threads_batch"], observed["http_threads"]) <= 0
-            or not 0 <= observed["gpu_layers_offloaded"] <= observed["gpu_layers_total"]
-            or observed["gpu_layers_total"] > configured["gpu_layers"]):
-        raise DataError("invalid runtime-selected thread or GPU layer count", 2)
     effective = {name: value for name, value in configured.items() if name != "provenance"}
-    effective.update(observed)
+    effective.update(selected)
     effective["port"] = port
-    effective["requested_gpu_layers"] = configured["gpu_layers"]
-    effective["gpu_layers"] = observed["gpu_layers_offloaded"]
-    effective["log_verbosity"] = runtime.DIAGNOSTIC_LOG_VERBOSITY
+    effective["trace_logging"] = False
     effective["reasoning_mode"] = protocol["reasoning_mode"]["value"]
     effective["request_sampling"] = {
         name: setting["value"] for name, setting in protocol["sampling"].items()
@@ -298,10 +239,19 @@ def _effective_settings(protocol: dict[str, Any], port: int, key: str,
     }
     effective["generation_endpoint"] = "/v1/chat/completions"
     effective["stream"] = False
-    effective["evidence"] = {"auto_selected": "startup diagnostics",
+    effective["evidence"] = {"selected_threads": "explicit server arguments",
                              "context_and_slots": "keyed /props",
                              "other_settings": "explicit server arguments"}
     return effective
+
+
+def _generation_response(port: int, key: str, payload: dict[str, Any],
+                         timeout: int) -> tuple[int, bytes]:
+    try:
+        return runtime.request(port, "POST", "/v1/chat/completions", key,
+                               payload, timeout=timeout)
+    except TimeoutError as error:
+        raise DataError(f"generation response timed out after {timeout} seconds", 1) from error
 
 
 def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any],
@@ -323,8 +273,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
     metadata["attempts"].append(attempt)
     write_json(directory / "run.json", metadata)
     process = subprocess.Popen(arguments, env=environment, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    diagnostics = _StartupDiagnostics(process.stdout)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    previous_signals = runtime.install_cleanup_signals()
     try:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
@@ -338,7 +288,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
             time.sleep(.5)
         else:
             raise DataError("runtime did not become healthy", 3)
-        effective = _effective_settings(protocol, port, key, diagnostics)
+        effective = _effective_settings(protocol, port, key, arguments)
         attempt["effective_runtime_settings"] = effective
         metadata["effective_runtime_settings"] = effective
         write_json(directory / "run.json", metadata)
@@ -346,6 +296,9 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         settings = {name: protocol["sampling"][name]["value"] for name in
                     ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty")}
         settings["max_tokens"] = protocol["sampling"]["max_output_tokens"]["value"]
+        timeout = runtime.generation_timeout(settings["max_tokens"])
+        attempt["generation_timeout_seconds"] = timeout
+        write_json(directory / "run.json", metadata)
         with (directory / "items.jsonl").open("a", encoding="utf-8") as stream:
             for item_id in ids:
                 source = rows[item_id]
@@ -355,11 +308,19 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         continue
                     seed = metadata["seeds"][sample]
                     started = time.monotonic()
-                    status, body = runtime.request(port, "POST", "/v1/chat/completions", key,
-                                                   {"model": runtime.ALIAS, "messages": messages,
-                                                    "seed": seed, "stream": False, **settings})
+                    status, body = _generation_response(
+                        port, key, {"model": runtime.ALIAS, "messages": messages,
+                                    "seed": seed, "stream": False, **settings}, timeout)
                     if status != 200:
                         raise DataError(f"generation returned HTTP {status}", 1)
+                    try:
+                        confirmed = runtime.confirm_sampling(port, key, {"seed": seed, **settings})
+                    except runtime.RuntimeErrorWithCode as error:
+                        raise DataError(str(error), error.code) from error
+                    attempt["confirmed_request_sampling"] = confirmed
+                    attempt["confirmed_request_count"] = attempt.get("confirmed_request_count", 0) + 1
+                    metadata["confirmed_request_sampling"] = confirmed
+                    write_json(directory / "run.json", metadata)
                     response = json.loads(body)
                     choice = response["choices"][0]
                     raw = choice["message"]["content"]
@@ -397,6 +358,6 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
-        diagnostics.join()
+        runtime.restore_cleanup_signals(previous_signals)
         attempt["ended"] = _utc()
         write_json(directory / "run.json", metadata)

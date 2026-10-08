@@ -1,6 +1,0 @@
-schema_version: 1
-model:
-  id: replace-with-model-id
-  revision: replace-with-immutable-revision
-  runtime_adapter: replace-after-runtime-selection
-  runtime_options: {}
