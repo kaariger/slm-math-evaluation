@@ -87,7 +87,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(args[args.index("--host") + 1], "127.0.0.1")
         self.assertEqual(args[args.index("--alias") + 1], "qwen3-8b")
         self.assertEqual(args[args.index("--reasoning-format") + 1], "none")
-        self.assertNotIn("--log-verbosity", args)
+        self.assertEqual(args[args.index("--log-verbosity") + 1], "3")
         self.assertGreater(int(args[args.index("--threads") + 1]), 0)
         self.assertGreater(int(args[args.index("--threads-http") + 1]), 0)
         self.assertIn("--no-webui", args)

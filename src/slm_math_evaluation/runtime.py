@@ -26,6 +26,7 @@ COMMIT = "0d0bfcd4fd8828e3e7906b6fc4561725b534511e"
 ALIAS = "qwen3-8b"
 SERVER_SHA256 = "d3bce60d45758268a90e0fca82ce5a22d5c35ecb92a06d1c544ed68ec2efa769"
 SERVER_IMPL_SHA256 = "e969ffd4ba1973700cec7b870527f6fc981db27f215e6db22b68afc57977ea3d"
+SERVER_LOG_VERBOSITY = 3  # INFO; TRACE (4) prints an API-key suffix.
 # The feasibility gate is 10 generated tokens/s; the observed Q4 rate was
 # about 23 tokens/s. Leave 120 s for prompt evaluation and runtime variance.
 MIN_GENERATION_TOKENS_PER_SECOND = 10
@@ -319,6 +320,7 @@ def server_arguments(server: Path, model: Path, port: int,
         raise RuntimeErrorWithCode("invalid reasoning mode", 3)
     reasoning_arg = {"hybrid": "auto", "forced_think": "on", "forced_non_think": "off"}[reasoning]
     return [str(server), "--model", str(model), "--alias", ALIAS,
+            "--log-verbosity", str(SERVER_LOG_VERBOSITY),
             "--host", "127.0.0.1", "--port", str(port),
             "--threads", str(threads), "--threads-batch", str(threads_batch),
             "--threads-http", str(http_threads),

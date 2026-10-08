@@ -10,7 +10,7 @@ versioned protocol; an approved version is never silently rewritten.
 |---|---:|---|---|
 | Output cap | 14,000 tokens | source-known-paper | Maintainer-approved literal reading of the paper's “14k”. |
 | Context size | 16,384 tokens | local-choice | Allows the proposed output cap plus a bounded prompt in the first local path. Long prompts could reduce the available output budget. |
-| GPU layers | 99 requested | local-choice | Requests full offload on the selected Apple Silicon machine; the runtime reports the actual result. |
+| GPU layers | 99 requested | local-choice | Requests full offload on the selected Apple Silicon machine. The keyed API does not expose the actual offload count at safe logging verbosity. |
 | Flash attention | on | local-choice | Matches the pinned runtime's successful local feasibility check. |
 | CPU threads, batch threads | -1, -1 (runtime auto selection) | local-choice | Keeps the pinned runtime's adaptive thread choice; host details are recorded per run. |
 | Logical, physical batch sizes | 2,048, 512 | vendor-filled | Explicitly pins the selected server build's defaults. |
@@ -32,8 +32,10 @@ versioned protocol; an approved version is never silently rewritten.
 
 The harness resolves approved auto CPU, batch, and HTTP thread settings to
 explicit server arguments and records the effective values in `run.json` before
-generation. Trace logging is disabled because the pinned server prints a key
-fragment at trace level. The keyed `/props` endpoint verifies context size,
+generation. The server is fixed at INFO verbosity (3); TRACE (4) is disabled
+because the pinned server prints a key fragment at trace level. `run.json`
+labels the GPU layer cap as requested, since the keyed API does not expose the
+actual offload count at INFO verbosity. The keyed `/props` endpoint verifies context size,
 slot count, alias, and disabled UI. Keyed `/slots` confirms each generation
 request's sampling values and seed; mismatches stop the run. Each attempt
 records its effective settings and confirmed sampling. A generation request's

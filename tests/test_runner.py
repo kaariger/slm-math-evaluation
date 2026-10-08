@@ -119,7 +119,8 @@ class RunnerFixtureTests(unittest.TestCase):
                  patch.object(runner.runtime, "sha256_file", side_effect=lambda path: (
                      data.sha256_file(path) if path == protocol_path else protocol["model"]["artifact"]["sha256"])), \
                  patch.object(runner.runtime, "server_arguments", return_value=[
-                     "server", "--threads", "8", "--threads-batch", "8", "--threads-http", "7"]), \
+                     "server", "--threads", "8", "--threads-batch", "8", "--threads-http", "7",
+                     "--n-gpu-layers", "99", "--log-verbosity", "3"]), \
                  patch.object(runner, "_check_runtime_version"), \
                  patch.object(runner.runtime, "request", side_effect=request), \
                  patch.object(runner, "_host", return_value={"os": "fixture", "arch": "fixture", "memory_gb": 1}), \
@@ -153,7 +154,9 @@ class RunnerFixtureTests(unittest.TestCase):
                 self.assertEqual(effective["threads"], 8)
                 self.assertEqual(effective["threads_batch"], 8)
                 self.assertEqual(effective["http_threads"], 7)
-                self.assertEqual(effective["gpu_layers"], 99)
+                self.assertEqual(effective["requested_gpu_layers"], 99)
+                self.assertNotIn("gpu_layers", effective)
+                self.assertEqual(effective["log_verbosity"], 3)
                 self.assertEqual(effective["context_size"], 16384)
                 self.assertFalse(effective["trace_logging"])
                 self.assertEqual(attempt["confirmed_request_sampling"]["max_tokens"], 14000)

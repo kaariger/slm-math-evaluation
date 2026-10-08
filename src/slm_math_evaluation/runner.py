@@ -228,10 +228,16 @@ def _effective_settings(protocol: dict[str, Any], port: int, key: str,
     for name, value in prop_values.items():
         if configured[name] != value:
             raise DataError(f"runtime properties differ: {name}", 2)
-    effective = {name: value for name, value in configured.items() if name != "provenance"}
+    effective = {name: value for name, value in configured.items()
+                 if name not in ("provenance", "gpu_layers")}
     effective.update(selected)
+    effective["requested_gpu_layers"] = argument("--n-gpu-layers")
     effective["port"] = port
+    effective["log_verbosity"] = argument("--log-verbosity")
     effective["trace_logging"] = False
+    if (effective["requested_gpu_layers"] != configured["gpu_layers"]
+            or effective["log_verbosity"] != runtime.SERVER_LOG_VERBOSITY):
+        raise DataError("runtime arguments differ from approved settings", 2)
     effective["reasoning_mode"] = protocol["reasoning_mode"]["value"]
     effective["request_sampling"] = {
         name: setting["value"] for name, setting in protocol["sampling"].items()
@@ -241,7 +247,8 @@ def _effective_settings(protocol: dict[str, Any], port: int, key: str,
     effective["stream"] = False
     effective["evidence"] = {"selected_threads": "explicit server arguments",
                              "context_and_slots": "keyed /props",
-                             "other_settings": "explicit server arguments"}
+                             "other_settings": "explicit server arguments",
+                             "actual_gpu_offload": "not exposed by keyed API at INFO verbosity"}
     return effective
 
 
