@@ -12,7 +12,7 @@ versioned protocol; an approved version is never silently rewritten.
 | Context size | 16,384 tokens | local-choice | Allows the proposed output cap plus a bounded prompt in the first local path. Long prompts could reduce the available output budget. |
 | GPU layers | 99 requested | local-choice | Requests full offload on the selected Apple Silicon machine. The keyed API does not expose the actual offload count at safe logging verbosity. |
 | Flash attention | on | local-choice | Matches the pinned runtime's successful local feasibility check. |
-| CPU threads, batch threads | -1, -1 (runtime auto selection) | local-choice | Keeps the pinned runtime's adaptive thread choice; host details are recorded per run. |
+| CPU threads, batch threads | -1, -1 (harness selection) | local-choice | The harness selects host counts and passes explicit thread arguments; effective values are recorded per run. |
 | Logical, physical batch sizes | 2,048, 512 | vendor-filled | Explicitly pins the selected server build's defaults. |
 | KV cache K/V types | f16, f16 | vendor-filled | Explicitly pins the selected server build's defaults. |
 | Model load mode | mmap | local-choice | Uses a mapped local GGUF without copying the full artifact into process memory. |
@@ -30,8 +30,8 @@ versioned protocol; an approved version is never silently rewritten.
 | Prompt, system message, examples | `{problem}` + `\n\n` + `Please reason step by step, and put your final answer within \boxed{}.`; no system message; zero examples | vendor-filled | The rendered user message must match these bytes exactly. |
 | Chat response transport | non-streaming `/v1/chat/completions` | local-choice | Preserves the complete raw content in one response; streamed equivalence was checked by the runtime fixture. |
 
-The harness resolves approved auto CPU, batch, and HTTP thread settings to
-explicit server arguments and records the effective values in `run.json` before
+The harness sets CPU, batch, and HTTP thread counts from the host CPU count and
+passes explicit server arguments. It records those effective values in `run.json` before
 generation. The server is fixed at INFO verbosity (3); TRACE (4) is disabled
 because the pinned server prints a key fragment at trace level. `run.json`
 labels the GPU layer cap as requested, since the keyed API does not expose the
@@ -39,8 +39,14 @@ actual offload count at INFO verbosity. The keyed `/props` endpoint verifies con
 slot count, alias, and disabled UI. Keyed `/slots` confirms each generation
 request's sampling values and seed; mismatches stop the run. Each attempt
 records its effective settings and confirmed sampling. A generation request's
-read timeout is 120 seconds plus the 14,000-token cap divided by the 10
-tokens/second feasibility floor (1,520 seconds for the approved cap).
+read timeout is 120 seconds plus the 14,000-token cap divided by the 5
+tokens/second conservative floor (2,920 seconds for the approved cap). Each
+attempt and the top-level run record store the effective timeout.
+
+`v1-ft` and `v1-nt` are reasoning-mode probes based on Q4 `v1`. They change
+only the protocol version and the reasoning-mode factor, to `forced_think` and
+`forced_non_think` respectively. They preserve the exact user-message prompt.
+No tier results are implied by these protocol files.
 
 The server starts with the listed runtime settings. The verification fixture
 temporarily uses temperature 0 and a 16-token output cap to compare streamed

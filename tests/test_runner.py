@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from slm_math_evaluation import data, runner
+from slm_math_evaluation.analysis import _factor
 from slm_math_evaluation.run_store import load_run
 
 
@@ -71,6 +72,25 @@ class RunnerFixtureTests(unittest.TestCase):
             protocol.pop("protocol_version")
             protocol["model"].pop("artifact")
         self.assertEqual(q4, q8)
+
+    def test_reasoning_probe_protocols_keep_prompt_and_one_factor(self):
+        root = Path(__file__).parents[1] / "configs/protocols"
+        base = json.loads((root / "protocol.yaml").read_text())
+        problem = "What is 8 + 9?"
+        expected_prompt = runner._prompt(base, problem)
+        for name, version, mode in (("math500-v1-ft.yaml", "v1-ft", "forced_think"),
+                                    ("math500-v1-nt.yaml", "v1-nt", "forced_non_think")):
+            with self.subTest(protocol=name):
+                variant = json.loads((root / name).read_text())
+                self.assertEqual(variant["protocol_version"], version)
+                self.assertEqual(variant["reasoning_mode"]["value"], mode)
+                self.assertEqual(runner._prompt(variant, problem), expected_prompt)
+                self.assertEqual(_factor(base, variant),
+                                 ("reasoning_mode.value", "hybrid", mode))
+                normalized = dict(variant)
+                normalized["protocol_version"] = "v1"
+                normalized["reasoning_mode"] = base["reasoning_mode"]
+                self.assertEqual(normalized, base)
 
     def test_captures_raw_generation_with_replayable_hashes_and_verdicts(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -160,7 +180,9 @@ class RunnerFixtureTests(unittest.TestCase):
                 self.assertEqual(effective["context_size"], 16384)
                 self.assertFalse(effective["trace_logging"])
                 self.assertEqual(attempt["confirmed_request_sampling"]["max_tokens"], 14000)
-                self.assertGreater(attempt["generation_timeout_seconds"], 600)
+                self.assertEqual(attempt["generation_timeout_seconds"], 2920)
+                self.assertEqual(resumed.metadata["generation_timeout_seconds"], 2920)
+                self.assertEqual(resumed.metadata["runtime_files_verified"]["regular_files_checked"], 43)
             self.assertEqual(len(resumed.items), 2)
             row = resumed.items[0]
             self.assertEqual(row["raw_output"], raw)

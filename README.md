@@ -8,7 +8,7 @@ any revision requires a new version. No tier results are included.
 
 ## Repository map
 
-- `configs/`: versionable model, dataset, prompt, and generation templates
+- `configs/`: versioned dataset manifest and evaluation protocol files
 - `docs/`: evaluation methodology, conformance rules, and public decisions
 - `src/slm_math_evaluation/`: Python implementation package
 - `tests/`: unit and visible specification tests
@@ -23,6 +23,8 @@ The first Qwen3-8B path uses pinned llama.cpp and Qwen's official Q4_K_M
 GGUF, with an official Q8_0 variant also pinned. Artifact identities and
 feasibility evidence are in
 [decision 0001](docs/decisions/0001-local-qwen-runtime.md).
+Run startup checks all 43 regular runtime files and 18 library links against
+the pinned release archive manifest.
 The [protocol decisions](docs/math500-protocol-proposal.md) identify runtime
 choices and their provenance. `slm-eval run` accepts the approved files after
 runtime and artifact verification records have been created for their hashes.

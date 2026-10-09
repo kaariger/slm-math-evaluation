@@ -264,6 +264,11 @@ def _generation_response(port: int, key: str, payload: dict[str, Any],
 def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any],
               manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]]) -> None:
     server, model = runtime.pinned_paths(protocol)
+    metadata["runtime_files_verified"] = {
+        "archive_sha256": runtime.ARCHIVE_SHA256,
+        "regular_files_checked": len(runtime.REGULAR_SHA256),
+        "symlinks_checked": len(runtime.SYMLINK_TARGETS),
+    }
     if runtime.sha256_file(model) != protocol["model"]["artifact"]["sha256"]:
         raise DataError("model artifact SHA-256 mismatch", 2)
     _check_runtime_version(server)
@@ -305,6 +310,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         settings["max_tokens"] = protocol["sampling"]["max_output_tokens"]["value"]
         timeout = runtime.generation_timeout(settings["max_tokens"])
         attempt["generation_timeout_seconds"] = timeout
+        metadata["generation_timeout_seconds"] = timeout
         write_json(directory / "run.json", metadata)
         with (directory / "items.jsonl").open("a", encoding="utf-8") as stream:
             for item_id in ids:

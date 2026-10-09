@@ -19,17 +19,18 @@ from typing import Any
 import yaml
 
 from .data import cache_root, runs_root
+from ._runtime_pin import ARCHIVE_SHA256, REGULAR_SHA256, SYMLINK_TARGETS
 
 
 BUILD = "b10412"
 COMMIT = "0d0bfcd4fd8828e3e7906b6fc4561725b534511e"
 ALIAS = "qwen3-8b"
-SERVER_SHA256 = "d3bce60d45758268a90e0fca82ce5a22d5c35ecb92a06d1c544ed68ec2efa769"
-SERVER_IMPL_SHA256 = "e969ffd4ba1973700cec7b870527f6fc981db27f215e6db22b68afc57977ea3d"
+SERVER_SHA256 = REGULAR_SHA256["llama-server"]
+SERVER_IMPL_SHA256 = REGULAR_SHA256["libllama-server-impl.dylib"]
 SERVER_LOG_VERBOSITY = 3  # INFO; TRACE (4) prints an API-key suffix.
-# The feasibility gate is 10 generated tokens/s; the observed Q4 rate was
-# about 23 tokens/s. Leave 120 s for prompt evaluation and runtime variance.
-MIN_GENERATION_TOKENS_PER_SECOND = 10
+# Full-length Q4 items have taken about 755 s. Q8 has no measured full-length
+# rate, so use the maintainer's conservative 5 tokens/s floor plus startup margin.
+MIN_GENERATION_TOKENS_PER_SECOND = 5
 ROUTES = tuple(
     tuple(line.split(" ", 1))
     for line in """GET /health
@@ -193,6 +194,28 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def verify_runtime_files(directory: Path) -> dict[str, Any]:
+    """Check the entire installed runtime against the pinned release archive."""
+    expected = set(REGULAR_SHA256) | set(SYMLINK_TARGETS)
+    try:
+        actual = {path.name for path in directory.iterdir()}
+    except OSError as error:
+        raise RuntimeErrorWithCode("pinned runtime directory is unavailable", 3) from error
+    if actual != expected:
+        raise RuntimeErrorWithCode("pinned runtime file set differs from archive", 2)
+    for name, digest in REGULAR_SHA256.items():
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or sha256_file(path) != digest:
+            raise RuntimeErrorWithCode(f"pinned runtime file SHA-256 mismatch: {name}", 2)
+    for name, target in SYMLINK_TARGETS.items():
+        path = directory / name
+        if not path.is_symlink() or path.readlink() != Path(target):
+            raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
+    return {"archive_sha256": ARCHIVE_SHA256,
+            "regular_files_checked": len(REGULAR_SHA256),
+            "symlinks_checked": len(SYMLINK_TARGETS)}
+
+
 def read_protocol(path: Path) -> tuple[dict[str, Any], str]:
     if not path.is_file():
         raise RuntimeErrorWithCode(f"protocol missing: {path}", 3)
@@ -220,12 +243,10 @@ def pinned_paths(protocol: dict[str, Any]) -> tuple[Path, Path]:
         raise RuntimeErrorWithCode(f"invalid runtime protocol: {error}", 3) from error
     root = cache_root() / "models"
     server = root / f"llama-{BUILD}" / "llama-server"
-    server_impl = server.parent / "libllama-server-impl.dylib"
     model = root / name
-    if not server.is_file() or not server_impl.is_file() or not model.is_file():
+    if not server.is_file() or not model.is_file():
         raise RuntimeErrorWithCode("pinned runtime or model artifact is missing", 3)
-    if sha256_file(server) != SERVER_SHA256 or sha256_file(server_impl) != SERVER_IMPL_SHA256:
-        raise RuntimeErrorWithCode("pinned runtime binary SHA-256 mismatch", 2)
+    verify_runtime_files(server.parent)
     return server, model
 
 
@@ -272,12 +293,21 @@ def confirm_sampling(port: int, key: str, requested: dict[str, Any]) -> dict[str
     except (ValueError, KeyError, TypeError) as error:
         raise RuntimeErrorWithCode(f"server sampling confirmation incomplete: {error}", 4) from error
     for name, expected in requested.items():
-        actual = confirmed[name]
-        match = (math.isclose(actual, expected, rel_tol=1e-6, abs_tol=1e-8)
-                 if isinstance(expected, float) else actual == expected)
-        if not match:
+        if not _sampling_matches({name: expected}, confirmed):
             raise RuntimeErrorWithCode(f"server sampling differs: {name}", 4)
     return confirmed
+
+
+def _sampling_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    for name, value in expected.items():
+        observed = actual.get(name)
+        if isinstance(value, float):
+            if not isinstance(observed, (int, float)) or not math.isclose(
+                    observed, value, rel_tol=1e-6, abs_tol=1e-8):
+                return False
+        elif observed != value:
+            return False
+    return True
 
 
 def server_arguments(server: Path, model: Path, port: int,
@@ -403,6 +433,10 @@ def _fixture_checks(port: int, key: str, protocol: dict[str, Any]) -> dict[str, 
     stream_confirmed = confirm_sampling(port, key, {"seed": 42, **fixture_parameters})
     streamed = _stream_content(stream_body)
     match = content == streamed
+    expected_sampling = {"seed": 42, **fixture_parameters}
+    request_mapping_checked = _sampling_matches(expected_sampling, confirmed)
+    parameter_match = (request_mapping_checked
+                       and _sampling_matches(expected_sampling, stream_confirmed))
     return {
         "parameter_equivalence": {
             "configured": configured,
@@ -410,8 +444,8 @@ def _fixture_checks(port: int, key: str, protocol: dict[str, Any]) -> dict[str, 
             "fixture_overrides": {"temperature": 0, "max_tokens": 16},
             "server_confirmed": confirmed,
             "stream_server_confirmed": stream_confirmed,
-            "request_mapping_checked": True,
-            "match": True,
+            "request_mapping_checked": request_mapping_checked,
+            "match": parameter_match,
         },
         "raw_capture_fidelity": {
             "nonstream_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
@@ -533,6 +567,8 @@ def verify_runtime(protocol_path: Path) -> Path:
             if settings != expected or props.get("model_path") != str(model):
                 raise RuntimeErrorWithCode("server settings differ from protocol", 4)
             record.update(_fixture_checks(port, key, protocol))
+            if not record["parameter_equivalence"]["match"]:
+                raise RuntimeErrorWithCode("server parameters differ from protocol", 4)
             if not record["raw_capture_fidelity"]["match"]:
                 raise RuntimeErrorWithCode("raw capture differs from streamed content", 4)
         record["status"] = "passed" if record["security_passed"] else "failed"

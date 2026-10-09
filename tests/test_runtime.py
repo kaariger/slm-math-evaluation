@@ -7,6 +7,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
 import tempfile
 from threading import Thread
 import time
@@ -18,6 +21,11 @@ from slm_math_evaluation.data import DataError
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
+    def test_timeout_floor_covers_approved_cap_and_is_recorded(self) -> None:
+        self.assertEqual(runtime.MIN_GENERATION_TOKENS_PER_SECOND, 5)
+        self.assertEqual(runtime.generation_timeout(14000), 2920)
+        self.assertGreater(runtime.generation_timeout(14000), 2 * 755)
+
     def test_delayed_local_generation_response_exceeds_thirty_seconds(self) -> None:
         class DelayedHandler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -68,6 +76,85 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 runtime.confirm_sampling(12345, "fixture", requested)
         self.assertEqual(caught.exception.code, 4)
         self.assertIn("top_k", str(caught.exception))
+
+    def test_fixture_equivalence_flags_use_server_confirmations(self) -> None:
+        protocol = json.loads((Path(__file__).parents[1] /
+                               "configs/protocols/protocol.yaml").read_text())
+        response = json.dumps({"model": "qwen3-8b", "choices": [{"message": {"content": "391"}}]}).encode()
+        streamed = b'data: {"choices":[{"delta":{"content":"391"}}]}\n\n'
+        expected = {name: protocol["sampling"][name]["value"] for name in
+                    ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty")}
+        expected.update(max_tokens=16, temperature=0, seed=42)
+        with patch.object(runtime, "request", side_effect=[(200, response), (200, streamed)]), \
+             patch.object(runtime, "confirm_sampling", side_effect=[
+                 {**expected, "top_k": 99}, expected]):
+            record = runtime._fixture_checks(12345, "fixture", protocol)
+        self.assertFalse(record["parameter_equivalence"]["request_mapping_checked"])
+        self.assertFalse(record["parameter_equivalence"]["match"])
+        with patch.object(runtime, "request", side_effect=[(200, response), (200, streamed)]), \
+             patch.object(runtime, "confirm_sampling", side_effect=[expected, expected]):
+            record = runtime._fixture_checks(12345, "fixture", protocol)
+        self.assertTrue(record["parameter_equivalence"]["request_mapping_checked"])
+        self.assertTrue(record["parameter_equivalence"]["match"])
+
+    def test_all_archive_members_are_pinned_and_tampering_fails(self) -> None:
+        self.assertEqual(len(runtime.REGULAR_SHA256), 43)
+        self.assertEqual(len(runtime.SYMLINK_TARGETS), 18)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "server").write_bytes(b"server")
+            (root / "library").write_bytes(b"library")
+            (root / "alias").symlink_to("library")
+            expected = {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                        for name in ("server", "library")}
+            with patch.object(runtime, "REGULAR_SHA256", expected), \
+                 patch.object(runtime, "SYMLINK_TARGETS", {"alias": "library"}):
+                checked = runtime.verify_runtime_files(root)
+                self.assertEqual(checked["regular_files_checked"], 2)
+                (root / "library").write_bytes(b"changed")
+                with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
+                    runtime.verify_runtime_files(root)
+                self.assertEqual(caught.exception.code, 2)
+
+    def test_server_cleanup_on_sigterm_and_sighup(self) -> None:
+        code = (
+            "import subprocess,sys,time; from pathlib import Path; "
+            "from slm_math_evaluation import runtime; "
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            "previous=runtime.install_cleanup_signals(); "
+            "Path(sys.argv[1]).write_text(str(child.pid)); "
+            "\ntry:\n"
+            " while True: time.sleep(.1)\n"
+            "finally:\n"
+            " child.terminate(); child.wait(timeout=5); "
+            "runtime.restore_cleanup_signals(previous)\n"
+        )
+        for selected in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=selected.name), tempfile.TemporaryDirectory() as directory:
+                pid_file = Path(directory) / "server.pid"
+                harness = subprocess.Popen([sys.executable, "-c", code, str(pid_file)],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           start_new_session=True)
+                child_pid = None
+                try:
+                    deadline = time.monotonic() + 5
+                    while not pid_file.exists() and harness.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.02)
+                    self.assertTrue(pid_file.exists(), "stand-in server did not start")
+                    child_pid = int(pid_file.read_text())
+                    os.kill(harness.pid, selected)
+                    harness.wait(timeout=5)
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)
+                finally:
+                    if harness.poll() is None:
+                        harness.kill()
+                        harness.wait(timeout=5)
+                    if child_pid is not None:
+                        try:
+                            os.kill(child_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
 
     def test_server_arguments_force_loopback_alias_and_raw_reasoning(self) -> None:
         protocol = {
@@ -136,7 +223,8 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 return hashlib.sha256(path.read_bytes()).hexdigest()
 
             with patch.dict(os.environ, {"SLM_EVAL_CACHE": str(root)}, clear=False), \
-                 patch.object(runtime, "sha256_file", side_effect=pinned_sha):
+                 patch.object(runtime, "sha256_file", side_effect=pinned_sha), \
+                 patch.object(runtime, "verify_runtime_files"):
                 with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
                     runtime.verify_artifact(protocol)
             self.assertEqual(caught.exception.code, 2)
