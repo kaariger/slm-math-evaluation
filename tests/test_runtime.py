@@ -116,6 +116,29 @@ class RuntimeBoundaryTests(unittest.TestCase):
                     runtime.verify_runtime_files(root)
                 self.assertEqual(caught.exception.code, 2)
 
+    def test_pinned_links_accept_symlinks_or_dereferenced_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "library").write_bytes(b"pinned library")
+            (root / "alias.0").symlink_to("library")
+            (root / "alias").symlink_to("alias.0")
+            digest = hashlib.sha256(b"pinned library").hexdigest()
+            with patch.object(runtime, "REGULAR_SHA256", {"library": digest}), \
+                 patch.object(runtime, "SYMLINK_TARGETS",
+                              {"alias.0": "library", "alias": "alias.0"}):
+                self.assertEqual(runtime.verify_runtime_files(root)["symlinks_checked"], 2)
+                (root / "alias.0").unlink()
+                (root / "alias.0").write_bytes(b"pinned library")
+                self.assertEqual(runtime.verify_runtime_files(root)["symlinks_checked"], 2)
+                (root / "alias").unlink()
+                (root / "alias").write_bytes(b"pinned library")
+                runtime.verify_runtime_files(root)
+                (root / "alias").write_bytes(b"different bytes")
+                with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
+                    runtime.verify_runtime_files(root)
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("alias", str(caught.exception))
+
     def test_server_cleanup_on_sigterm_and_sighup(self) -> None:
         code = (
             "import subprocess,sys,time; from pathlib import Path; "

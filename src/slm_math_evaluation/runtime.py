@@ -209,7 +209,32 @@ def verify_runtime_files(directory: Path) -> dict[str, Any]:
             raise RuntimeErrorWithCode(f"pinned runtime file SHA-256 mismatch: {name}", 2)
     for name, target in SYMLINK_TARGETS.items():
         path = directory / name
-        if not path.is_symlink() or path.readlink() != Path(target):
+        # Copies of the release archive may dereference its links. In either
+        # representation the bytes must match the pinned regular-file target.
+        target_name = name
+        visited = set()
+        while target_name in SYMLINK_TARGETS:
+            if target_name in visited:
+                raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
+            visited.add(target_name)
+            target_name = SYMLINK_TARGETS[target_name]
+        expected_digest = REGULAR_SHA256.get(target_name)
+        if expected_digest is None:
+            raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
+        if path.is_symlink():
+            try:
+                valid_target = path.resolve(strict=True) == (directory / target).resolve(strict=True)
+            except (OSError, RuntimeError):
+                valid_target = False
+            if not valid_target:
+                raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
+        elif not path.is_file():
+            raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
+        try:
+            valid_content = sha256_file(path) == expected_digest
+        except OSError:
+            valid_content = False
+        if not valid_content:
             raise RuntimeErrorWithCode(f"pinned runtime link mismatch: {name}", 2)
     return {"archive_sha256": ARCHIVE_SHA256,
             "regular_files_checked": len(REGULAR_SHA256),
