@@ -18,9 +18,10 @@ def split_reasoning(raw_output: str) -> tuple[str | None, str]:
     opening = raw_output.rfind("<think>")
     if opening < 0:
         return None, raw_output
+    thinking = "".join(re.findall(r"<think>(.*?)(?:</think>|$)", raw_output, re.DOTALL))
     if opening > closing:
-        return raw_output[opening:], ""
-    return raw_output[:closing], raw_output[closing + len("</think>"):]
+        return thinking, ""
+    return thinking, raw_output[closing + len("</think>"):]
 
 
 def _balanced_boxes(final: str) -> list[str]:
@@ -55,7 +56,7 @@ def extract(final: str, truncated: bool) -> dict[str, Any]:
 
 def extract_raw(raw_output: str, truncated: bool) -> tuple[bool, dict[str, Any]]:
     thinking, final = split_reasoning(raw_output)
-    return thinking is not None, extract(final, truncated)
+    return bool(thinking and thinking.strip()), extract(final, truncated)
 
 
 def score_primary(answer: str | None, reference: str) -> dict[str, Any]:
