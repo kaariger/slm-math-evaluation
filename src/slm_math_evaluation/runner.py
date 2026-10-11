@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import platform
@@ -105,19 +106,46 @@ def _protocol_check(protocol: dict[str, Any]) -> None:
         raise DataError("few-shot examples are unsupported by this prompt renderer", 3)
 
 
-def _host() -> dict[str, Any]:
-    memory_gb = None
+def _darwin_memory_bytes() -> int | None:
+    """Use the macOS kernel API when POSIX physical-page counts are absent."""
     try:
-        import subprocess as sp
-        if platform.system() == "Darwin":
-            memory_gb = round(int(sp.check_output(["sysctl", "-n", "hw.memsize"], text=True)) / 2**30, 2)
-    except (OSError, ValueError, subprocess.CalledProcessError):
+        query = ctypes.CDLL(None).sysctlbyname
+        query.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                          ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        query.restype = ctypes.c_int
+        value = ctypes.c_uint64()
+        length = ctypes.c_size_t(ctypes.sizeof(value))
+        if query(b"hw.memsize", ctypes.byref(value), ctypes.byref(length), None, 0) == 0:
+            if length.value == ctypes.sizeof(value) and value.value > 0:
+                return value.value
+    except (AttributeError, OSError):
         pass
-    return {"os": platform.system(), "arch": platform.machine(), "memory_gb": memory_gb}
+    return None
+
+
+def _host() -> dict[str, Any]:
+    os_name, arch = platform.system(), platform.machine()
+    if not os_name or not arch:
+        raise DataError("host OS or architecture unavailable", 3)
+    memory_bytes = None
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        pages = os.sysconf("SC_PHYS_PAGES")
+        if page_size > 0 and pages > 0:
+            memory_bytes = page_size * pages
+    except (AttributeError, OSError, ValueError):
+        pass
+    if memory_bytes is None and os_name == "Darwin":
+        memory_bytes = _darwin_memory_bytes()
+    if memory_bytes is None or memory_bytes <= 0:
+        raise DataError("host physical memory unavailable", 3)
+    return {"os": os_name, "arch": arch,
+            "memory_gb": round(memory_bytes / 2**30, 2)}
 
 
 def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
-                  manifest_sha: str, tier: str, k: int, seed_base: int) -> dict[str, Any]:
+                  manifest_sha: str, tier: str, k: int, seed_base: int,
+                  host: dict[str, Any]) -> dict[str, Any]:
     return {"run_id": run_id, "protocol_version": protocol["protocol_version"],
             "protocol_sha256": protocol_sha, "manifest_sha256": manifest_sha,
             "tier": tier, "k": k, "seeds": [seed_base + sample for sample in range(k)],
@@ -125,7 +153,7 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
             "runtime_build": protocol["runtime"]["build"], "adapter": ADAPTER,
             "extractor": protocol["extraction"],
             "scorers": [protocol["scorers"][role] for role in ("primary", "secondary")],
-            "executor": "slm-eval native harness", "host": _host(),
+            "executor": "slm-eval native harness", "host": host,
             "attempts": [], "status": "interrupted"}
 
 
@@ -147,6 +175,7 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     _protocol_check(protocol)
     verification = _verification_copies(protocol_sha, protocol)
     _source_rows(manifest, ids)
+    host = _host()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(5)
     directory = data.runs_root() / run_id
     directory.mkdir(parents=True, exist_ok=False)
@@ -154,7 +183,8 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     (directory / "manifest.json").write_bytes(manifest_bytes)
     for name, content in verification.items():
         (directory / name).write_bytes(content)
-    metadata = _run_metadata(run_id, protocol, protocol_sha, sha256_bytes(manifest_bytes), tier, k, seed_base)
+    metadata = _run_metadata(run_id, protocol, protocol_sha, sha256_bytes(manifest_bytes),
+                             tier, k, seed_base, host)
     write_json(directory / "run.json", metadata)
     (directory / "items.jsonl").touch()
     # Expose the ID before generation so an interrupted run can be resumed.
@@ -183,6 +213,7 @@ def resume(run_id: str) -> str:
     if not required - existing:
         raise DataError("no missing item/sample pairs to resume", 3)
     _source_rows(run.manifest, ids)
+    _host()
     _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing)
     return run_id
 

@@ -45,6 +45,51 @@ class _FakeSocket:
 
 
 class RunnerFixtureTests(unittest.TestCase):
+    def test_host_memory_uses_physical_pages_without_subprocess(self):
+        with patch.object(runner.platform, "system", return_value="Darwin"), \
+             patch.object(runner.platform, "machine", return_value="arm64"), \
+             patch.object(runner.os, "sysconf", side_effect=lambda name: {
+                 "SC_PAGE_SIZE": 16384, "SC_PHYS_PAGES": 2097152}[name]), \
+             patch.object(runner, "_darwin_memory_bytes") as fallback:
+            self.assertEqual(runner._host(), {"os": "Darwin", "arch": "arm64",
+                                              "memory_gb": 32.0})
+        fallback.assert_not_called()
+
+    def test_host_memory_fallback_and_unavailable_fields(self):
+        with patch.object(runner.platform, "system", return_value="Darwin"), \
+             patch.object(runner.platform, "machine", return_value="arm64"), \
+             patch.object(runner.os, "sysconf", side_effect=ValueError("unavailable")), \
+             patch.object(runner, "_darwin_memory_bytes", return_value=32 * 2**30):
+            self.assertEqual(runner._host()["memory_gb"], 32.0)
+        for system, arch, fallback in (("", "arm64", 32 * 2**30),
+                                       ("Darwin", "", 32 * 2**30),
+                                       ("Darwin", "arm64", None)):
+            with self.subTest(system=system, arch=arch, fallback=fallback), \
+                 patch.object(runner.platform, "system", return_value=system), \
+                 patch.object(runner.platform, "machine", return_value=arch), \
+                 patch.object(runner.os, "sysconf", return_value=-1), \
+                 patch.object(runner, "_darwin_memory_bytes", return_value=fallback):
+                with self.assertRaises(data.DataError) as caught:
+                    runner._host()
+                self.assertEqual(caught.exception.code, 3)
+
+    def test_unknown_host_stops_before_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protocol, manifest = root / "protocol.yaml", root / "manifest.json"
+            protocol.write_text("{}")
+            manifest.write_text("{}")
+            with patch.object(runner, "_identity", return_value=["fixture"]), \
+                 patch.object(runner, "_protocol_check"), \
+                 patch.object(runner, "_verification_copies", return_value={}), \
+                 patch.object(runner, "_source_rows", return_value={}), \
+                 patch.object(runner, "_host", side_effect=data.DataError("host unknown", 3)), \
+                 patch.object(runner, "_generate") as generate:
+                with self.assertRaises(data.DataError) as caught:
+                    runner.start(protocol, manifest, "smoke", 1, 1)
+            self.assertEqual(caught.exception.code, 3)
+            generate.assert_not_called()
+
     def test_nonzero_few_shot_is_rejected(self):
         protocol = json.loads((Path(__file__).parents[1] /
                                "configs/protocols/protocol.yaml").read_text())

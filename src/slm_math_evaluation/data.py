@@ -36,7 +36,8 @@ NORMALIZATION = {
 }
 TIER_SEED = 20261006
 SMOKE_SIZE = 16
-VALIDATION_SIZE = 128
+VALIDATION_SIZE = 200
+REVIEWED_FLAGGED_VALIDATION_SIZE = 128
 PROVENANCE_NOTE = (
     "The pinned PRM800K split has 7,499 train-origin items; one of the expected "
     "7,500 MATH-train items is absent upstream. Its 4,501 test-origin rows are "
@@ -254,13 +255,56 @@ def flagged_pairs(test_rows: list[dict[str, Any]], dev_rows: list[dict[str, Any]
 
 
 def manifest_inputs_hash() -> str:
+    # The maintainer's verdicts bind to the already reviewed flagged file.
+    # Its historical tier-size marker is kept stable: tier selection does not
+    # affect the duplicate pairs or their review identity.
     inputs = {
         "source": SOURCE,
         "membership_derivation": "unique_id-prefix-v1",
         "normalization": NORMALIZATION,
-        "tiers": {"seed": TIER_SEED, "smoke_size": SMOKE_SIZE, "validation_size": VALIDATION_SIZE},
+        "tiers": {"seed": TIER_SEED, "smoke_size": SMOKE_SIZE,
+                  "validation_size": REVIEWED_FLAGGED_VALIDATION_SIZE},
     }
     return sha256_bytes(canonical_json(inputs))
+
+
+def validation_targets(test_rows: list[dict[str, Any]]) -> dict[tuple[str, int], int]:
+    """Allocate 200 slots by MATH-500 subject × level, with stable tie breaks."""
+    counts = Counter((row["subject"], row["level"]) for row in test_rows)
+    total = sum(counts.values())
+    if total == 0:
+        raise DataError("cannot stratify validation without test items", 3)
+    targets = {cell: count * VALIDATION_SIZE // total for cell, count in counts.items()}
+    remaining = VALIDATION_SIZE - sum(targets.values())
+    ranked = sorted(counts, key=lambda cell: (-(counts[cell] * VALIDATION_SIZE % total), cell))
+    for cell in ranked[:remaining]:
+        targets[cell] += 1
+    return targets
+
+
+def draw_tiers(test_rows: list[dict[str, Any]], dev_rows: list[dict[str, Any]],
+               excluded: set[str]) -> tuple[list[str], list[str]]:
+    eligible = sorted(row["unique_id"] for row in dev_rows if row["unique_id"] not in excluded)
+    if len(eligible) < SMOKE_SIZE + VALIDATION_SIZE:
+        raise DataError("not enough eligible dev items to draw tiers", 3)
+    # This reproduces the first 16 IDs of the frozen seeded draw.
+    smoke = random.Random(TIER_SEED).sample(eligible, SMOKE_SIZE)
+    smoke_ids = set(smoke)
+    cells: dict[tuple[str, int], list[str]] = defaultdict(list)
+    for row in dev_rows:
+        item_id = row["unique_id"]
+        if item_id not in excluded and item_id not in smoke_ids:
+            cells[(row["subject"], row["level"])].append(item_id)
+    targets = validation_targets(test_rows)
+    generator = random.Random(TIER_SEED)
+    validation = []
+    for cell in sorted(targets):
+        pool = sorted(cells[cell])
+        target = targets[cell]
+        if len(pool) < target:
+            raise DataError(f"not enough eligible dev items in validation cell {cell}", 3)
+        validation.extend(generator.sample(pool, target))
+    return smoke, validation
 
 
 def make_manifest(
@@ -284,11 +328,7 @@ def make_manifest(
         if pair["pair"] in verdicts
     ]
     excluded = {entry["id"] for entry in exclusions if entry["verdict"] == "exclude"}
-    eligible_ids = sorted(row["unique_id"] for row in dev_rows if row["unique_id"] not in excluded)
-    required = SMOKE_SIZE + VALIDATION_SIZE
-    if len(eligible_ids) < required:
-        raise DataError("not enough eligible dev items to draw tiers", 3)
-    draw = random.Random(TIER_SEED).sample(eligible_ids, required)
+    smoke, validation = draw_tiers(test_rows, dev_rows, excluded)
     items = [
         {
             "id": row["unique_id"],
@@ -308,7 +348,7 @@ def make_manifest(
         "normalization": NORMALIZATION,
         "items": items,
         "exclusions": exclusions,
-        "tiers": {"seed": TIER_SEED, "smoke": draw[:SMOKE_SIZE], "validation": draw[SMOKE_SIZE:]},
+        "tiers": {"seed": TIER_SEED, "smoke": smoke, "validation": validation},
         "flagged_sha256": flagged_sha256,
         "flagged_pairs_count": len(pairs),
         "review_status": "complete" if len(verdicts) == len(pairs) else "pending",

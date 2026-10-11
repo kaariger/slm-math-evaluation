@@ -4,6 +4,7 @@ import json
 import random
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -63,7 +64,7 @@ class DuplicateChecks(unittest.TestCase):
 class ManifestChecks(unittest.TestCase):
     def test_build_is_byte_identical_and_keeps_flagged_outside_repo(self) -> None:
         tests = [row("test/a/1.json", "Long problem about apples and pears 123")]
-        dev = [row(f"train/a/{i}.json", f"Independent problem number {i} and quantity {i * 3}") for i in range(160)]
+        dev = [row(f"train/a/{i}.json", f"Independent problem number {i} and quantity {i * 3}") for i in range(240)]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = root / "manifest.json"
@@ -77,6 +78,70 @@ class ManifestChecks(unittest.TestCase):
             self.assertEqual(len(parsed["tiers"]["smoke"]), data.SMOKE_SIZE)
             self.assertEqual(len(parsed["tiers"]["validation"]), data.VALIDATION_SIZE)
             self.assertFalse(set(parsed["tiers"]["smoke"]) & set(parsed["tiers"]["validation"]))
+            verdicts = root / "verdicts.json"
+            pairs = json.loads(flagged.read_text())["pairs"]
+            data.write_json(verdicts, {"verdicts_version": "1",
+                                       "flagged_sha256": data.sha256_file(flagged),
+                                       "verdicts": [{"pair": pair["pair"], "verdict": "exclude"}
+                                                    for pair in pairs]})
+            with mock.patch.object(data, "load_rows", return_value=(tests, dev)), \
+                 mock.patch.object(data, "_used_tier_snapshots", return_value=[]):
+                data.apply_verdicts(manifest, verdicts, flagged)
+                reviewed = manifest.read_bytes()
+                data.build_manifest(manifest, flagged)
+                data.apply_verdicts(manifest, verdicts, flagged)
+            self.assertEqual(manifest.read_bytes(), reviewed)
+
+    def test_validation_cells_preserve_frozen_smoke_and_are_disjoint(self) -> None:
+        manifest = json.loads((Path(__file__).parents[1] /
+                               "configs/datasets/math500-manifest-v1.json").read_text())
+        items = manifest["items"]
+        test = [{"unique_id": item["id"], "subject": item["subject"], "level": item["level"]}
+                for item in items if item["role"] == "test"]
+        dev = [{"unique_id": item["id"], "subject": item["subject"], "level": item["level"]}
+               for item in items if item["role"] == "dev"]
+        excluded = {entry["id"] for entry in manifest["exclusions"] if entry["verdict"] == "exclude"}
+        frozen_smoke = [
+            "train/intermediate_algebra/2067.json", "train/algebra/2061.json",
+            "train/number_theory/959.json", "train/counting_and_probability/744.json",
+            "train/counting_and_probability/772.json", "train/intermediate_algebra/281.json",
+            "train/algebra/804.json", "train/prealgebra/574.json",
+            "train/intermediate_algebra/893.json", "train/counting_and_probability/255.json",
+            "train/intermediate_algebra/456.json", "train/number_theory/54.json",
+            "train/intermediate_algebra/475.json", "train/prealgebra/1575.json",
+            "train/intermediate_algebra/724.json", "train/precalculus/298.json",
+        ]
+        expected = {
+            "Algebra": [7, 8, 10, 12, 12],
+            "Counting & Probability": [1, 3, 2, 5, 5],
+            "Geometry": [1, 3, 3, 4, 5],
+            "Intermediate Algebra": [3, 5, 8, 9, 14],
+            "Number Theory": [2, 4, 6, 8, 5],
+            "Prealgebra": [3, 8, 7, 8, 7],
+            "Precalculus": [1, 5, 6, 5, 5],
+        }
+        target_cells = {(subject, level): target for subject, values in expected.items()
+                        for level, target in enumerate(values, 1)}
+        self.assertEqual(data.validation_targets(test), target_cells)
+        smoke, validation = data.draw_tiers(test, dev, excluded)
+        self.assertEqual(smoke, frozen_smoke)
+        self.assertEqual(smoke, manifest["tiers"]["smoke"])
+        self.assertEqual(validation, manifest["tiers"]["validation"])
+        self.assertEqual((smoke, validation), data.draw_tiers(test, dev, excluded))
+        self.assertEqual(len(validation), 200)
+        self.assertEqual(len(set(smoke + validation)), 216)
+        self.assertFalse(excluded & set(smoke + validation))
+        indexed = {item["unique_id"]: (item["subject"], item["level"]) for item in dev}
+        self.assertEqual(Counter(indexed[item_id] for item_id in validation), target_cells)
+
+    def test_validation_cell_shortage_is_precondition_error(self) -> None:
+        test = [row("test/a/1.json", "test")]
+        dev = [dict(row("train/a/1.json", "dev"), subject="Geometry")]
+        with mock.patch.object(data, "SMOKE_SIZE", 0), mock.patch.object(data, "VALIDATION_SIZE", 1):
+            with self.assertRaises(data.DataError) as caught:
+                data.draw_tiers(test, dev, set())
+        self.assertEqual(caught.exception.code, 3)
+        self.assertIn("validation cell", str(caught.exception))
 
     def test_bad_cached_file_is_integrity_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
