@@ -8,6 +8,8 @@ any revision requires a new version. No tier results are included.
 
 Results page: [Qwen3-8B on MATH-500, October 2026](docs/results/2026-10-math500-qwen3-8b/).
 
+This project was developed with AI assistance.
+
 ## Repository map
 
 - `configs/`: versioned dataset manifest and evaluation protocol files
