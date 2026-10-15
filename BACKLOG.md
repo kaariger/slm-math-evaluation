@@ -16,18 +16,19 @@ the public repository. Priority and design should be refined from evidence.
   prompt construction, and raw generation capture.
 - Implemented answer extraction, two scorers, per-example evidence, rescore,
   per-dataset reporting, and sensitivity analysis.
+- Executed the smoke, validation and test tiers under frozen protocol v1 and published the curated result ([Qwen3-8B on MATH-500](results/2026-10-math500-qwen3-8b/)).
 
 ## Next evaluation work
 
-- Execute and retain complete tier runs with per-item evidence.
-- Curate a result only after protocol, dataset, runtime, and scorer identities
-  have been verified against its retained artifacts.
-- Identify and version a reference method before any separate conformance
-  comparison. Reference conformance is outside the current native path.
+- Measure run-to-run variation with additional seeds for the headline protocol.
+- Re-generate capped outputs with a larger output budget as a pre-declared sensitivity reading.
+- Classify the disagreements between the PRM800K grader and math-verify.
+- Identify and version a reference method, then run a separate conformance comparison.
+- Make the CLI tests independent of console-script launchers, so checkouts in paths containing spaces pass.
 
 ## After the first path
 
-- Exercise a second compatible generative-text model through the same
-  architecture and document any abstraction leaks.
-- Revisit additional models or datasets only if the first two-model evidence
-  justifies expanding scope.
+- Evaluate robustness on perturbed problem variants (for example GSM-Symbolic-style templates).
+- Exercise a second compatible model (Qwen3.5-9B) and a cross-family model through the same architecture, documenting any abstraction leaks.
+- Fine-tune the most promising model and compare it with its base under the same frozen protocol, runtime and quantization.
+- Add calibrated parallel evaluation so long tiers finish in hours rather than days.
