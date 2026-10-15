@@ -3,9 +3,10 @@
 ## Purpose and phase
 
 This project builds a reproducible, inspectable evaluation pipeline for
-generative language models on mathematical reasoning tasks. It is currently in
-the inception/bootstrap phase; the runtime and benchmark implementation are not
-yet selected or implemented.
+generative language models on mathematical reasoning tasks. The first vertical
+path (Qwen3-8B × MATH-500, native protocol, pinned local llama.cpp runtime) is
+implemented and evaluated; curated results are under `results/`. Adding models,
+datasets or runtimes requires a new public decision.
 
 ## Structure
 
