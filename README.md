@@ -48,8 +48,27 @@ poetry install
 poetry check --lock
 poetry run python -m unittest discover -s tests -v
 poetry run pytest -q tests/visible
+PYTHONDONTWRITEBYTECODE=1 poetry run pytest -q tests/holdout \
+  -k "not test_ho_mf_04 and not test_ho_mf_05 and not test_ho_rp_05 and not test_ho_rt_04"
 poetry run python scripts/validate_public_repo.py .
 ```
+
+The holdout command runs only the required holdout cases; its `-k` expression
+deselects the advisory cases HO-MF-04, HO-MF-05, HO-RP-05 and HO-RT-04.
+Holdout cases that need the dataset, the network or the real runtime are
+skipped, with the reason shown, unless their gates are set:
+
+- `SLM_EVAL_HOLDOUT_NETWORK=1` lets data cases fetch the pinned dataset with
+  `slm-eval data fetch`; the fetch case needs it.
+- `SLM_EVAL_HOLDOUT_SEED_CACHE=<dir>` seeds each case's temporary dataset cache
+  from a populated cache, enabling the other data cases without network access.
+- `SLM_EVAL_HOLDOUT_RUNTIME=1`, together with a seed cache that holds `models/`,
+  enables the runtime cases. They need the pinned model and llama.cpp runtime,
+  `ps` and `lsof`, and perform full smoke-tier runs that can take hours;
+  `SLM_EVAL_HOLDOUT_RUN_TIMEOUT` sets the per-run limit (default 14400 seconds).
+
+Run the holdout command from the repository root. `tests/holdout/README.md`
+lists every suite variable.
 
 The public-content validator checks generic local-path and credential patterns.
 It is a cheap deterministic bootstrap guard, not a complete secret scanner.
