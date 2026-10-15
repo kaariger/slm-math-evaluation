@@ -53,3 +53,7 @@ poetry run python scripts/validate_public_repo.py .
 
 The public-content validator checks generic local-path and credential patterns.
 It is a cheap deterministic bootstrap guard, not a complete secret scanner.
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE); third-party notices are in [NOTICE](NOTICE).

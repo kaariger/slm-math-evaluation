@@ -1,0 +1,20 @@
+SLM Math Evaluation
+Copyright 2026 kaariger
+
+Third-party components
+----------------------
+
+1. PRM800K grader
+   Path:         src/slm_math_evaluation/_prm800k_grader/
+   Upstream:     https://github.com/openai/prm800k at commit
+                 7ecc794703b2877f63226f2477a49b34f9b25163
+   License:      MIT License, Copyright (c) 2023 OpenAI
+   License file: src/slm_math_evaluation/_prm800k_grader/LICENSE
+
+2. MATH answer normalization
+   Path:         src/slm_math_evaluation/_prm800k_grader/math_normalize.py
+   Upstream:     largely copied, via PRM800K, from
+                 https://github.com/hendrycks/math at commit
+                 985bdc1696e88e8643f081a0ff4719da39f2ae2a
+   License:      MIT License, Copyright (c) 2021 Dan Hendrycks
+   License file: src/slm_math_evaluation/_prm800k_grader/LICENSE-hendrycks-math
