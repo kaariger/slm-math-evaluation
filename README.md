@@ -6,6 +6,8 @@ two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
 are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved;
 any revision requires a new version. No tier results are included.
 
+Results page: [Qwen3-8B on MATH-500, October 2026](docs/results/2026-10-math500-qwen3-8b/).
+
 ## Repository map
 
 - `configs/`: versioned dataset manifest and evaluation protocol files
