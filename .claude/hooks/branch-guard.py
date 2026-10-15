@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Block Claude Code's built-in file writes on protected Git branches."""
+"""Block the agent's built-in file writes on protected Git branches."""
 
 import json
 import subprocess
