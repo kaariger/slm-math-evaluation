@@ -43,6 +43,6 @@ and justifies its weighting.
 
 The first local model runtime is selected in
 [decision 0001](decisions/0001-local-qwen-runtime.md). The
-[MATH-500 interface contract](math500-interface-contract-v0.5.md) specifies the
+[MATH-500 interface contract](math500-interface-contract-v0.7.md) specifies the
 run schema and keyed server boundary. The first reference harness remains an
 open implementation decision.
