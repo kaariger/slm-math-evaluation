@@ -1,15 +1,54 @@
 # SLM Math Evaluation
 
-SLM Math Evaluation implements a local Qwen3-8B × MATH-500 evaluation path.
-The pinned dataset, split manifest, keyed llama.cpp runtime, extraction,
-two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
-are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved;
-any revision requires a new version. Curated tier results are published on the
-[results page](docs/results/2026-10-math500-qwen3-8b/).
+A reproducible, auditable evaluation of small open language models on mathematical
+reasoning, run entirely on a laptop. The first path measures **Qwen3-8B on MATH-500**
+with a pinned local runtime (llama.cpp and Qwen's official GGUF), a frozen protocol,
+two independent graders, and per-problem evidence.
 
-Results page: [Qwen3-8B on MATH-500, October 2026](docs/results/2026-10-math500-qwen3-8b/).
+**Result (October 2026):** **90.2%** on MATH-500 (95% interval 87.3–92.5%), consistent
+with the 88.80% reported by MathGPT.ai. With reasoning turned off, accuracy falls to
+81.4%. The [results page](results/2026-10-math500-qwen3-8b/) covers the method,
+sensitivities, caveats and next steps.
 
 This project was developed with AI assistance.
+
+## Reproducing the results
+
+Tested on an Apple M1 Pro with 32 GB of memory. The 500-problem test tier takes
+about 33 hours with reasoning on; start with the 16-problem smoke tier.
+
+1. Install the locked environment: `poetry install`
+2. Download the pinned llama.cpp runtime archive and Qwen3-8B GGUF named in
+   [decision 0001](docs/decisions/0001-local-qwen-runtime.md#reproduction) into
+   the dataset cache's `models/` directory, then extract the archive there:
+
+   ```bash
+   tar -xzf ~/.cache/slm-eval/data/models/llama-b10412-bin-macos-arm64.tar.gz -C ~/.cache/slm-eval/data/models
+   ```
+
+   `slm-eval` reads the runtime and model from the cache, not from the
+   repository `models/` directory that decision 0001's feasibility script uses.
+3. Fetch the pinned dataset: `poetry run slm-eval data fetch`
+4. Verify the runtime and model for the protocol:
+
+   ```bash
+   poetry run slm-eval verify-runtime --protocol configs/protocols/protocol.yaml
+   poetry run slm-eval verify-artifact --protocol configs/protocols/protocol.yaml
+   ```
+
+5. Run a tier (`smoke`, `validation` or `test`). The run ID is printed on its own
+   line before generation starts:
+
+   ```bash
+   poetry run slm-eval run --protocol configs/protocols/protocol.yaml --manifest configs/datasets/math500-manifest-v1.json --tier smoke
+   ```
+
+   Resume an interrupted run with `poetry run slm-eval run --resume <run-id>`.
+6. Report, compared with the published figure as a fraction:
+   `poetry run slm-eval report --run <run-id> --compare-published 0.888`
+
+The dataset cache defaults to `~/.cache/slm-eval/data` (`SLM_EVAL_CACHE`), and runs
+are stored under `~/.cache/slm-eval/runs` (`SLM_EVAL_RUNS`).
 
 ## Repository map
 
@@ -18,7 +57,7 @@ This project was developed with AI assistance.
 - `src/slm_math_evaluation/`: Python implementation package
 - `tests/`: unit and visible specification tests, plus the holdout suite in
   `tests/holdout/`, run with the documented holdout command under Verification
-- `results/`: curated, reviewable result artifacts only
+- `results/`: curated results, starting with [Qwen3-8B on MATH-500 (October 2026)](results/2026-10-math500-qwen3-8b/)
 - `scripts/validate_public_repo.py`: deterministic public-content leakage check
 - `scripts/validate_runtime_feasibility.py`: local runtime feasibility check;
   requires the pinned artifacts described in decision 0001
@@ -39,7 +78,7 @@ Generation runs require matching runtime and artifact verification records.
 The CLI provides `data fetch`, `data build-manifest`, `data show-pair`,
 `data apply-verdicts`, `verify-runtime`, `verify-artifact`, `run`, `run --resume`,
 `rescore`, `sensitivity`, and `report`. The interface and run-store schemas
-are in the [v0.6 contract](docs/math500-interface-contract-v0.6.md).
+are in the [v0.7 contract](docs/math500-interface-contract-v0.7.md).
 
 Local datasets, model weights, caches, databases, logs, and full run artifacts
 are ignored by default. A result belongs under `results/` only after it has
