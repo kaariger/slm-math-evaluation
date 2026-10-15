@@ -4,7 +4,8 @@ SLM Math Evaluation implements a local Qwen3-8B × MATH-500 evaluation path.
 The pinned dataset, split manifest, keyed llama.cpp runtime, extraction,
 two scorers, run store, rescoring, sensitivity analysis, and aggregate reports
 are available. Protocols `v1` (Q4_K_M) and `v1-q8` (Q8_0) are approved;
-any revision requires a new version. No tier results are included.
+any revision requires a new version. Curated tier results are published on the
+[results page](docs/results/2026-10-math500-qwen3-8b/).
 
 Results page: [Qwen3-8B on MATH-500, October 2026](docs/results/2026-10-math500-qwen3-8b/).
 
@@ -15,7 +16,8 @@ This project was developed with AI assistance.
 - `configs/`: versioned dataset manifest and evaluation protocol files
 - `docs/`: evaluation methodology, conformance rules, and public decisions
 - `src/slm_math_evaluation/`: Python implementation package
-- `tests/`: unit and visible specification tests
+- `tests/`: unit and visible specification tests, plus the holdout suite in
+  `tests/holdout/`, run with the documented holdout command under Verification
 - `results/`: curated, reviewable result artifacts only
 - `scripts/validate_public_repo.py`: deterministic public-content leakage check
 - `scripts/validate_runtime_feasibility.py`: local runtime feasibility check;
