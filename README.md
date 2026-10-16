@@ -7,12 +7,12 @@ two independent graders, and per-problem evidence.
 
 **Result (October 2026):** **90.2%** on MATH-500 (451/500; 95% interval 87.3–92.5%),
 from one pass with 4-bit weights on a laptop. MathGPT.ai reported 88.80% under a
-protocol whose sampling settings, output budget and grader aren't stated; by the rule
-we declared before the test run, our reading is consistent with it. Thirty answers hit
-the output cap and count as wrong, and a second grader scores the same answers at
-92.0%. With reasoning turned off, accuracy falls to 81.4%. The
-[results page](results/2026-10-math500-qwen3-8b/) covers the method, sensitivities,
-caveats and next steps.
+protocol whose sampling settings, output budget and grader aren't stated. That figure
+lies inside our 95% interval. The protocols may differ, so this compares two
+measurements rather than verifying theirs. Thirty answers hit the output cap and count
+as wrong, and a second grader scores the same answers at 92.0%. With reasoning turned
+off, accuracy falls to 81.4%. The [results page](results/2026-10-math500-qwen3-8b/)
+covers the method, sensitivities, caveats and next steps.
 
 This project was developed with AI assistance.
 

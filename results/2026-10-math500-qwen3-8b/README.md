@@ -82,6 +82,15 @@ Before freezing the protocol, we ran two probes on the validation tier:
 - **Q8_0 quantization:** 91.0% vs 93.0% for Q4_K_M, a paired difference of −2.0 points (95% interval −4.5 to 0.0). The gap is the same size as its four extra capped outputs (4 of 200).
 - **Reasoning off:** 87.5%, 5.5 points below.
 
+Paired outcomes for the quantization probe on the 200 validation problems, primary grader:
+
+| | Q8_0: correct | Q8_0: wrong |
+|---|---:|---:|
+| **Q4_K_M: correct** | 181 | 5 |
+| **Q4_K_M: wrong** | 1 | 13 |
+
+Its interval uses the same paired bootstrap as the test comparison, over these 200 problems.
+
 Neither probe changed the protocol: v1 was frozen as originally specified.
 
 ## Two sensitivities worth knowing
