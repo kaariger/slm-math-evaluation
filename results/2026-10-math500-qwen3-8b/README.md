@@ -1,14 +1,14 @@
-# Reproducing Qwen3-8B on MATH-500 on a laptop: 90.2%, consistent with the reported 88.8%
+# Re-measuring Qwen3-8B on MATH-500 on a laptop: 90.2% (reported: 88.80%)
 
 *October 2026 · kaariger*
 
 ## TL;DR
 
 - We independently re-measured **Qwen3-8B on MATH-500** with a fully local, pinned setup on an Apple Silicon laptop. We used Qwen's official 4-bit GGUF, run through llama.cpp.
-- **Headline: 90.2% (451/500), 95% interval 87.3–92.5%.** MathGPT.ai's reported **88.80%** lies inside that interval. By the rule we declared before running the test set, the reproduction is **consistent**.
-- **Two choices move the number by about 2 points:**
-  - **Grader.** A second, independent grader scores the same outputs at 92.0%.
-  - **Output cap.** 6% of answers hit the 14,000-token cap and were scored as wrong.
+- **Headline: 90.2% (451/500), 95% interval 87.3–92.5%.** MathGPT.ai reported **88.80%** under a protocol whose sampling settings, output budget and grader aren't stated. That figure lies inside our interval, so by the rule we declared before running the test set, the reading is **consistent**. This compares two measurements; it doesn't verify theirs.
+- **Two sensitivities:**
+  - **Grader.** A second, independent grader scores the same outputs at 92.0%, 1.8 points higher.
+  - **Output cap.** 30 answers (6%) hit the 14,000-token cap and were scored as wrong. The effect of a larger cap hasn't been measured.
 - **Turning reasoning off costs 8.8 points** (81.4%).
 
 ![MATH-500 test accuracy with 95% Wilson intervals](figures/fig1-test-accuracy.png)
@@ -20,7 +20,7 @@ In June 2025, MathGPT.ai published a large-scale evaluation of open models on ma
 Before studying robustness, or trying to improve it with fine-tuning, we wanted a baseline we could trust. That meant three things:
 - an independent re-measurement of the headline number;
 - on hardware anyone can own;
-- with every setting pinned and every step auditable.
+- with every setting pinned and per-problem records kept for every run. The records stay private because they contain benchmark text; anyone can rerun the evaluation.
 
 ## Setup
 
@@ -61,16 +61,25 @@ Before studying robustness, or trying to improve it with fine-tuning, we wanted 
 | **Hybrid reasoning (v1), the headline** | **90.2%** | 87.3–92.5% | 92.0% | 30 | 100% |
 | Reasoning off (v1-nt), the sensitivity probe | 81.4% | 77.8–84.6% | 83.0% | 1 | 0% |
 
-- **The reading: consistent.** 88.80% lies inside 87.3–92.5%, and our headline is 1.4 points above it. If the reported figure came from a single 500-problem pass, it would carry similar uncertainty: roughly 85.7–91.3%.
+- **The reading: consistent,** under the rule declared in advance. 88.80% lies inside 87.3–92.5%, and our headline is 1.4 points above it. If the reported figure came from a single 500-problem pass, it would carry similar uncertainty: roughly 85.7–91.3%. Because the original protocol isn't fully known, this compares two measurements; it doesn't test whether the protocols are equivalent.
 - **Reasoning matters.** On the same 500 problems, forcing reasoning off costs **8.8 points** (paired bootstrap 95% interval: −11.8 to −5.8).
 - **Throughput.** The headline run took **32 h 36 m** on the laptop, at about 21–22 tokens per second. With reasoning off, outputs are much shorter, and the run took 5 h 47 m.
+
+Paired outcomes on the 500 test problems, primary grader:
+
+| | Reasoning off: correct | Reasoning off: wrong |
+|---|---:|---:|
+| **Headline: correct** | 396 | 55 |
+| **Headline: wrong** | 11 | 38 |
+
+The paired interval resamples the 500 problems 2,000 times (seed 4242) and takes the 2.5th and 97.5th percentiles of the mean difference, widened if needed to include the observed difference.
 
 ### Validation probes (n = 200)
 
 ![Validation-tier probes](figures/fig2-validation-probes.png)
 
 Before freezing the protocol, we ran two probes on the validation tier:
-- **Q8_0 quantization:** 91.0% vs 93.0% for Q4_K_M. The 2-point gap is about the size of its four extra capped outputs.
+- **Q8_0 quantization:** 91.0% vs 93.0% for Q4_K_M, a paired difference of −2.0 points (95% interval −4.5 to 0.0). The gap is the same size as its four extra capped outputs (4 of 200).
 - **Reasoning off:** 87.5%, 5.5 points below.
 
 Neither probe changed the protocol: v1 was frozen as originally specified.
@@ -82,7 +91,7 @@ Neither probe changed the protocol: v1 was frozen as originally specified.
 - On the test set, **all 9 headline disagreements went one way**: the secondary grader accepted answers the primary rejected.
 - Under the secondary grader, the headline is 92.0% (89.3–94.1%), and that interval *excludes* 88.80%.
 
-The reading uses the grader declared in advance, so it stands. But the choice of grader alone moves the result by about 2 points. Reports of MATH-500 accuracy should say which grader they used.
+The reading uses the grader declared in advance, so it stands. But the choice of grader alone moves the result by 1.8 points. Reports of MATH-500 accuracy should say which grader they used.
 
 **2. The output cap.**
 
@@ -90,16 +99,16 @@ The reading uses the grader declared in advance, so it stands. But the choice of
 
 - **What happened:** 30 of the 500 headline answers (6.0%) hit the 14,000-token cap. The protocol scores them as wrong.
 - **Why they were capped:** a structural review found that 29 were still reasoning when they were cut off, and one was stuck in a repetition loop.
-- **Two of them already contained a complete boxed answer** before the cut-off. Counting those would give 90.6%.
+- **Two of them already contained a complete boxed answer** before the cut-off. The protocol still scores them as truncated, and we haven't checked whether those answers are correct.
 - **The bounds:** the headline lies between **90.2%** (as scored) and **96.2%** (if every capped answer had been right).
 
 Output length, and with it the truncation rate, can shift whenever the model, the quantization or the fine-tuning changes. Any before-and-after comparison should therefore declare a cap-sensitivity reading in advance.
 
 ## Caveats
 
-- **A single seed.** The intervals cover sampling of problems, not run-to-run variation at temperature 0.6. Additional seeds are deferred.
+- **A single seed.** The intervals treat the 500 problems as a sample from a larger population of similar problems. They don't cover run-to-run variation at temperature 0.6. Additional seeds are deferred.
 - **A reconstructed protocol.** The original post doesn't state its sampling settings, output budget or grader. Ours are documented choices, and they may differ.
-- **Local quantized inference.** The headline uses 4-bit weights. The Q8_0 probe suggests the effect is small but not zero.
+- **Local quantized inference.** The headline uses 4-bit weights. On the validation tier, the 8-bit probe differed by −2.0 points, with an interval that reaches zero; the effect on the test set wasn't measured.
 - **Laptop conditions.** The machine slept twice during the headline run. Generation paused and resumed, with no failed or repeated work.
 
 ## Next steps
@@ -132,7 +141,7 @@ If you maintain variant or tutoring-style math datasets suitable for robustness 
 | | |
 |---|---|
 | Mode | **Native** evaluation under this project's protocol. Not a reference-harness conformance run. |
-| Evaluated code | Commit `ebe20b5488e69ebbab985bb795c4c6c35e83ef9d`. Later commits change only documentation, licences and tests. |
+| Evaluated code | Commit `ebe20b5488e69ebbab985bb795c4c6c35e83ef9d`. Later commits change documentation, licences, tests and repository configuration (ignore files and one hook's docstring); the evaluation code and protocols are unchanged. |
 | Protocols | `configs/protocols/protocol.yaml` (v1, headline), SHA-256 `ce48a2448c61af2839e62d63137b06d96ca7bc1b81ce68809adf2af36da8f0ee`<br>`configs/protocols/math500-v1-nt.yaml` (reasoning off), SHA-256 `aca3d73cd37eda13c6bdc863b59b4b2cd6928d2c6d9dd694f80a7e1b47b2d5cd`<br>`configs/protocols/math500-v1-q8.yaml` (Q8_0 probe), SHA-256 `fcfb1f420ec41d6089db9eaf5d158d24353716c15985bc51c22cb925fd966446` |
 | Dataset manifest | `configs/datasets/math500-manifest-v1.json`, SHA-256 `a10c02e7ac60b563a4d112cad92c2540ce58d6c0a49fa73f844091df66e48c71`. The source data are pinned to PRM800K's MATH splits at commit `7ecc794703b2877f63226f2477a49b34f9b25163`. |
 | Model | `Qwen/Qwen3-8B-GGUF` at revision `7c41481f57cb95916b40956ab2f0b139b296d974`. File `Qwen3-8B-Q4_K_M.gguf`, SHA-256 `d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785`. |
@@ -154,6 +163,6 @@ The figures here are regenerated by [`make_figures.py`](make_figures.py) from th
 ## References
 
 - Khanna, Rastogi, Kumar, Relan, Tran (MathGPT.ai), [*Are the best Open Source models (Qwen, Phi, Nvidia, DeepSeek) robust mathematical reasoners: Insights from Large-Scale Evaluations*](https://www.mathgpt.ai/blog/2025/06/03/are-the-best-open-source-models-qwen-phi-nvidia-deepseek-robust-mathematical-reasoners-insights-from-large-scale-evaluations), June 2025.
-- Hendrycks et al., *Measuring Mathematical Problem Solving With the MATH Dataset*, 2021 ([data](https://github.com/hendrycks/math)).
-- Lightman et al., *Let's Verify Step by Step* (PRM800K and the MATH-500 split), 2023 ([repository](https://github.com/openai/prm800k)).
+- Hendrycks et al., *Measuring Mathematical Problem Solving With the MATH Dataset*, 2021, [arXiv:2103.03874](https://arxiv.org/abs/2103.03874) ([data](https://github.com/hendrycks/math)).
+- Lightman et al., *Let's Verify Step by Step* (PRM800K and the MATH-500 split), 2023, [arXiv:2305.20050](https://arxiv.org/abs/2305.20050) ([repository](https://github.com/openai/prm800k)).
 - [Math-Verify](https://github.com/huggingface/Math-Verify), a mathematical answer-equivalence checker.

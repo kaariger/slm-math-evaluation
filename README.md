@@ -5,10 +5,14 @@ reasoning, run entirely on a laptop. The first path measures **Qwen3-8B on MATH-
 with a pinned local runtime (llama.cpp and Qwen's official GGUF), a frozen protocol,
 two independent graders, and per-problem evidence.
 
-**Result (October 2026):** **90.2%** on MATH-500 (95% interval 87.3–92.5%), consistent
-with the 88.80% reported by MathGPT.ai. With reasoning turned off, accuracy falls to
-81.4%. The [results page](results/2026-10-math500-qwen3-8b/) covers the method,
-sensitivities, caveats and next steps.
+**Result (October 2026):** **90.2%** on MATH-500 (451/500; 95% interval 87.3–92.5%),
+from one pass with 4-bit weights on a laptop. MathGPT.ai reported 88.80% under a
+protocol whose sampling settings, output budget and grader aren't stated; by the rule
+we declared before the test run, our reading is consistent with it. Thirty answers hit
+the output cap and count as wrong, and a second grader scores the same answers at
+92.0%. With reasoning turned off, accuracy falls to 81.4%. The
+[results page](results/2026-10-math500-qwen3-8b/) covers the method, sensitivities,
+caveats and next steps.
 
 This project was developed with AI assistance.
 
@@ -99,7 +103,8 @@ poetry run python scripts/validate_public_repo.py .
 ```
 
 The holdout command runs only the required holdout cases; its `-k` expression
-deselects the advisory cases HO-MF-04, HO-MF-05, HO-RP-05 and HO-RT-04.
+deselects the four non-required cases: HO-MF-05 and HO-RP-05 (advisory), and
+HO-MF-04 and HO-RT-04 (invalid).
 Holdout cases that need the dataset, the network or the real runtime are
 skipped, with the reason shown, unless their gates are set:
 
