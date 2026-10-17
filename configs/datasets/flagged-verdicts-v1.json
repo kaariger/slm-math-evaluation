@@ -1,0 +1,70 @@
+{
+  "verdicts_version": "1",
+  "flagged_sha256": "3fa41d3a5f06d36ebe52eb0b6372eccd58f1f0ee4ad3ae377743cbd4242e7a30",
+  "verdicts": [
+    {
+      "pair": 1,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 2,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 3,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 4,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 5,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 6,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 7,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 8,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 9,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 10,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 11,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 12,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 13,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 14,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 15,
+      "verdict": "exclude"
+    },
+    {
+      "pair": 16,
+      "verdict": "exclude"
+    }
+  ]
+}

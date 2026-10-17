@@ -37,11 +37,26 @@ provenance. Q4_K_M is an intentional quantized representation and must not be
 reported as interchangeable with an unquantized checkpoint. The GGUF metadata
 names its source model `Qwen3 8B Awq Compatible Instruct`.
 
-This decision selects the runtime family and first tested artifacts. It does
-not yet choose whether the production adapter will invoke a process or a local
-server.
+This decision selected the runtime family and first tested artifacts. The
+vertical path now uses the keyed, run-scoped server required by the approved
+interface contract v0.5.
 
-## Feasibility evidence
+## Increment 2 update
+
+### Increment 2 artifact variant: Q8_0
+
+The official `Qwen3-8B-Q8_0.gguf` is pinned to the same
+`Qwen/Qwen3-8B-GGUF` revision,
+`7c41481f57cb95916b40956ab2f0b139b296d974`. Its SHA-256 is
+`408b955510e196121c1c375201744783b5c9a43c7956d73fc78df54c66e883d6`,
+matching the [official artifact record](https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q8_0.gguf).
+The downloaded bytes matched that digest. With the pinned `b10412` server,
+a keyed loopback fixture completion returned HTTP 200, reported the neutral
+`qwen3-8b` alias, produced nonempty content, and finished normally. The server
+terminated after the check. This is an artifact compatibility check, not a
+benchmark result or an approved protocol value.
+
+## Initial feasibility evidence
 
 The pinned artifacts were first tested on 2026-08-13 and re-run on 2026-10-05
 on an ARM64 Apple M1 Pro with 32 GB of unified memory. Both local artifacts

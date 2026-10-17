@@ -1,0 +1,67 @@
+{
+  "protocol_version": "v1-nt",
+  "model": {
+    "artifact": {
+      "file": "Qwen3-8B-Q4_K_M.gguf",
+      "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+      "quantization": "Q4_K_M",
+      "provenance": "local-choice"
+    }
+  },
+  "runtime": {
+    "build": "b10412",
+    "invocation": "keyed-run-scoped-server",
+    "model_alias": "qwen3-8b",
+    "host": "127.0.0.1",
+    "port": "ephemeral",
+    "ui": false,
+    "context_size": 16384,
+    "threads": -1,
+    "threads_batch": -1,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "gpu_layers": 99,
+    "flash_attention": true,
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
+    "load_mode": "mmap",
+    "context_shift": false,
+    "parallel_slots": 1,
+    "jinja": true,
+    "reasoning_budget": -1,
+    "reasoning_format": "none",
+    "provenance": "local-choice"
+  },
+  "prompt": {
+    "template": "{problem}\n\nPlease reason step by step, and put your final answer within \\boxed{}.",
+    "system_prompt": null,
+    "few_shot": 0,
+    "provenance": "vendor-filled"
+  },
+  "reasoning_mode": {"value": "forced_non_think", "provenance": "local-choice"},
+  "sampling": {
+    "temperature": {"value": 0.6, "provenance": "source-known-paper"},
+    "top_p": {"value": 0.95, "provenance": "source-known-paper"},
+    "top_k": {"value": 20, "provenance": "vendor-filled"},
+    "min_p": {"value": 0, "provenance": "vendor-filled"},
+    "presence_penalty": {"value": 0, "provenance": "local-choice"},
+    "repeat_penalty": {"value": 1, "provenance": "local-choice"},
+    "max_output_tokens": {"value": 14000, "provenance": "source-known-paper"},
+    "seed_policy": {"value": "seed = seed_base + sample_index", "provenance": "local-choice"}
+  },
+  "extraction": {"id": "boxed-last-v1", "version": "1.0.0"},
+  "scorers": {
+    "primary": {"id": "prm800k-grader", "pin": "7ecc794703b2877f63226f2477a49b34f9b25163"},
+    "secondary": {"id": "math-verify", "pin": "0.8.0"}
+  },
+  "dataset": {
+    "source": {
+      "url": "https://github.com/openai/prm800k",
+      "commit": "7ecc794703b2877f63226f2477a49b34f9b25163",
+      "files": [
+        {"path": "prm800k/math_splits/test.jsonl", "sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"},
+        {"path": "prm800k/math_splits/train.jsonl", "sha256": "90d96daeac3fe343ebb1e22ce93dd99690f75983e957f88de42f87cffe1e8076"}
+      ]
+    }
+  }
+}
