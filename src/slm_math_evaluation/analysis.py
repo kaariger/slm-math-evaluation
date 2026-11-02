@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .data import DataError, read_json, write_json
+from . import model_adapters
 from .evaluation import (EXTRACTOR_ID, EXTRACTOR_VERSION, PRIMARY_PIN,
-                         SECONDARY_PIN, extract_raw, score_primary, score_secondary)
+                         SECONDARY_PIN, extract_raw, extract_raw_with_state,
+                         score_primary, score_secondary)
 from .run_store import StoredRun, load_run, write_text
 
 
@@ -40,8 +42,13 @@ def rescore(run_id: str) -> Path:
     run = load_run(run_id)
     extractor, scorers = _method_identities(run)
     records = []
+    adapter = (model_adapters.from_protocol(run.protocol)
+               if run.protocol.get("model", {}).get("adapter") is not None else None)
     for row in sorted(run.items, key=lambda item: (item["item_id"], item["sample_index"])):
-        _, extraction = extract_raw(row["raw_output"], row["truncated"])
+        if adapter is None:
+            _, extraction = extract_raw(row["raw_output"], row["truncated"])
+        else:
+            _, _, extraction = extract_raw_with_state(row["raw_output"], row["truncated"], adapter)
         answer = extraction["answer"]
         recomputed = {
             "primary": score_primary(answer, row["reference_answer"])["correct"],
@@ -150,6 +157,8 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     if published is not None and (not math.isfinite(published) or not 0 <= published <= 1):
         raise DataError("published value must be a fraction in [0, 1]", 3)
     run = load_run(run_id)
+    if run.protocol.get("role", "target") == "fixture":
+        raise DataError("fixture runs cannot be reported as target results", 3)
     extractor, scorer_identities = _method_identities(run)
     sensitivity = read_json(sensitivity_path) if sensitivity_path else None
     if sensitivity is not None and (sensitivity.get("sensitivity_version") != "1"
@@ -183,7 +192,9 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
         "extractor": extractor, "scorer_identities": scorer_identities,
         "protocol_provenance": _provenance(run.protocol),
         "deviations": run.protocol.get("deviations", []),
-        "interpretation": "Best-effort reproduction under a reconstructed public protocol; original protocol unknown.",
+        "interpretation": ("Evaluation under the study's stated settings, compared with the "
+                           "published figure; not a reproduction." if published is not None else
+                           "Evaluation under the study's stated settings; not a reproduction."),
     }
     if published is not None:
         document["comparison"] = _comparison_reading(published, primary, secondary, sensitivity)

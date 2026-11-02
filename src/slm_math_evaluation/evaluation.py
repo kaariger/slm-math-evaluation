@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .model_adapters import Qwen3Adapter
+
 
 EXTRACTOR_ID = "boxed-last-v1"
 EXTRACTOR_VERSION = "1.0.0"
@@ -14,14 +16,8 @@ SECONDARY_PIN = "0.8.0"
 
 
 def split_reasoning(raw_output: str) -> tuple[str | None, str]:
-    closing = raw_output.rfind("</think>")
-    opening = raw_output.rfind("<think>")
-    if opening < 0:
-        return None, raw_output
-    thinking = "".join(re.findall(r"<think>(.*?)(?:</think>|$)", raw_output, re.DOTALL))
-    if opening > closing:
-        return thinking, ""
-    return thinking, raw_output[closing + len("</think>"):]
+    thinking, final, _ = Qwen3Adapter().split(raw_output)
+    return thinking, final
 
 
 def _balanced_boxes(final: str) -> list[str]:
@@ -57,6 +53,12 @@ def extract(final: str, truncated: bool) -> dict[str, Any]:
 def extract_raw(raw_output: str, truncated: bool) -> tuple[bool, dict[str, Any]]:
     thinking, final = split_reasoning(raw_output)
     return bool(thinking and thinking.strip()), extract(final, truncated)
+
+
+def extract_raw_with_state(raw_output: str, truncated: bool, adapter: Any
+                           ) -> tuple[bool, str, dict[str, Any]]:
+    thinking, final, state = adapter.split(raw_output)
+    return bool(thinking and thinking.strip()), state, extract(final, truncated)
 
 
 def score_primary(answer: str | None, reference: str) -> dict[str, Any]:

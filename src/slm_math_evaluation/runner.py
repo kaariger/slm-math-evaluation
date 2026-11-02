@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import os
 import platform
 import secrets
@@ -16,14 +17,17 @@ from typing import Any
 
 import yaml
 
-from . import data, runtime
+from . import data, model_adapters, runtime
 from .data import DataError, read_json, sha256_bytes, write_json
 from .evaluation import (EXTRACTOR_ID, EXTRACTOR_VERSION, PRIMARY_PIN,
-                         SECONDARY_PIN, extract_raw, score_primary, score_secondary)
+                         SECONDARY_PIN, extract_raw, extract_raw_with_state,
+                         score_primary, score_secondary)
 from .run_store import StoredRun, load_run
 
 
 ADAPTER = {"id": "llama-cpp-chat-completions", "version": "1.0.0"}
+PROVENANCE_LABELS = {"source-known-paper", "source-known-blog", "vendor-filled",
+                     "vendor-template", "inferred", "local-choice"}
 
 
 def _utc() -> str:
@@ -53,7 +57,8 @@ def _verified_record(path: Path, name: str, protocol_sha: str,
             or record.get("runtime_build") != protocol["runtime"]["build"]
             or record.get("status") != "passed"
             or (name == "runtime-verification.json"
-                and record.get("contract_version") != "v0.6")):
+                and record.get("contract_version") !=
+                ("v0.8.1" if protocol.get("model", {}).get("adapter") else "v0.6"))):
         raise DataError(f"verification record identity/status mismatch: {path}", 2)
     return content
 
@@ -104,6 +109,60 @@ def _protocol_check(protocol: dict[str, Any]) -> None:
         raise DataError("unsupported seed policy", 3)
     if protocol.get("prompt", {}).get("few_shot") != 0:
         raise DataError("few-shot examples are unsupported by this prompt renderer", 3)
+    try:
+        adapter = model_adapters.from_protocol(protocol)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise DataError(f"invalid model adapter or reasoning mode: {error}", 3) from error
+    if protocol.get("role", "target") not in ("target", "fixture"):
+        raise DataError("invalid model role", 3)
+    new_protocol = protocol.get("model", {}).get("adapter") is not None
+    if not new_protocol:
+        return  # Preserve v0.7 protocol behavior and its regression fixtures.
+    settings_with_provenance = [protocol["model"].get("artifact"),
+                                protocol.get("runtime"), protocol.get("prompt"),
+                                protocol.get("reasoning_mode")]
+    settings_with_provenance.extend(protocol.get("sampling", {}).values())
+    settings_with_provenance.extend(protocol.get("resources", {}).values())
+    if any(not isinstance(setting, dict) or setting.get("provenance") not in PROVENANCE_LABELS
+           for setting in settings_with_provenance):
+        raise DataError("model protocol has a missing or invalid provenance label", 3)
+    template = protocol["model"].get("chat_template")
+    if (not isinstance(template, dict) or template.get("source") != "embedded"
+            or template.get("sha256") != adapter.template_sha256):
+        raise DataError("model chat template pin is missing or unsupported", 3)
+    if adapter.id != "qwen3":
+        conversion_hash = protocol["model"]["artifact"].get("conversion_record_sha256")
+        if conversion_hash is not None and (not isinstance(conversion_hash, str)
+                                            or len(conversion_hash) != 64
+                                            or any(c not in "0123456789abcdef" for c in conversion_hash)):
+            raise DataError("invalid conversion record SHA-256", 3)
+    sampling = protocol.get("sampling", {})
+    try:
+        context = sampling["context_length"]["value"]
+        stop = sampling["stop"]["value"]
+        top_k = sampling["top_k"]["value"]
+        min_p = sampling["min_p"]["value"]
+        resources = {key: protocol["resources"][key]["value"] for key in
+                     ("max_memory_gb", "min_free_memory_gb", "stuck_after_awake_s")}
+    except (KeyError, TypeError) as error:
+        raise DataError(f"incomplete model protocol: {error}", 3) from error
+    if (type(context) is not int or context < 1
+            or context != protocol.get("runtime", {}).get("context_size")
+            or type(top_k) is not int or top_k < 0
+            or not isinstance(min_p, (int, float)) or isinstance(min_p, bool)
+            or not 0 <= min_p <= 1
+            or not isinstance(stop, list) or any(not isinstance(item, str) or not item for item in stop)
+            or not isinstance(resources["max_memory_gb"], (int, float))
+            or isinstance(resources["max_memory_gb"], bool)
+            or not math.isfinite(resources["max_memory_gb"])
+            or resources["max_memory_gb"] <= 0
+            or not isinstance(resources["min_free_memory_gb"], (int, float))
+            or isinstance(resources["min_free_memory_gb"], bool)
+            or not math.isfinite(resources["min_free_memory_gb"])
+            or resources["min_free_memory_gb"] < 0
+            or type(resources["stuck_after_awake_s"]) is not int
+            or resources["stuck_after_awake_s"] < 1):
+        raise DataError("invalid context, sampling, stop, or resource value", 3)
 
 
 def _darwin_memory_bytes() -> int | None:
@@ -143,10 +202,18 @@ def _host() -> dict[str, Any]:
             "memory_gb": round(memory_bytes / 2**30, 2)}
 
 
+def _resource_host_check(protocol: dict[str, Any], host: dict[str, Any]) -> None:
+    if protocol.get("model", {}).get("adapter") is None:
+        return
+    required = protocol["resources"]["max_memory_gb"]["value"]
+    if host["memory_gb"] < required:
+        raise DataError("host memory is below the model resource requirement", 3)
+
+
 def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
                   manifest_sha: str, tier: str, k: int, seed_base: int,
                   host: dict[str, Any]) -> dict[str, Any]:
-    return {"run_id": run_id, "protocol_version": protocol["protocol_version"],
+    document = {"run_id": run_id, "protocol_version": protocol["protocol_version"],
             "protocol_sha256": protocol_sha, "manifest_sha256": manifest_sha,
             "tier": tier, "k": k, "seeds": [seed_base + sample for sample in range(k)],
             "model_artifact_sha256": protocol["model"]["artifact"]["sha256"],
@@ -155,6 +222,15 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
             "scorers": [protocol["scorers"][role] for role in ("primary", "secondary")],
             "executor": "slm-eval native harness", "host": host,
             "attempts": [], "status": "interrupted"}
+    if protocol.get("model", {}).get("adapter") is not None:
+        adapter = model_adapters.from_protocol(protocol)
+        document.update(adapter={"id": adapter.id, "version": model_adapters.ADAPTER_VERSION},
+                        role=protocol.get("role", "target"), subset_sha256=None,
+                        chat_template_sha256=protocol["model"]["chat_template"]["sha256"],
+                        events=[])
+        document["model_source_revision"] = (None if document["role"] == "fixture" else
+                                              getattr(adapter, "source_revision", None))
+    return document
 
 
 def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base: int) -> str:
@@ -176,6 +252,7 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     verification = _verification_copies(protocol_sha, protocol)
     _source_rows(manifest, ids)
     host = _host()
+    _resource_host_check(protocol, host)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(5)
     directory = data.runs_root() / run_id
     directory.mkdir(parents=True, exist_ok=False)
@@ -213,7 +290,7 @@ def resume(run_id: str) -> str:
     if not required - existing:
         raise DataError("no missing item/sample pairs to resume", 3)
     _source_rows(run.manifest, ids)
-    _host()
+    _resource_host_check(run.protocol, _host())
     _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing)
     return run_id
 
@@ -280,11 +357,14 @@ def _effective_settings(protocol: dict[str, Any], port: int, key: str,
                              "context_and_slots": "keyed /props",
                              "other_settings": "explicit server arguments",
                              "actual_gpu_offload": "not exposed by keyed API at INFO verbosity"}
+    if protocol.get("model", {}).get("adapter") is not None:
+        effective["resources"] = {name: setting["value"] for name, setting in
+                                  protocol["resources"].items()}
     return effective
 
 
 def _generation_response(port: int, key: str, payload: dict[str, Any],
-                         timeout: int) -> tuple[int, bytes]:
+                         timeout: int | None) -> tuple[int, bytes]:
     try:
         return runtime.request(port, "POST", "/v1/chat/completions", key,
                                payload, timeout=timeout)
@@ -294,6 +374,8 @@ def _generation_response(port: int, key: str, payload: dict[str, Any],
 
 def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any],
               manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]]) -> None:
+    adapter = model_adapters.from_protocol(protocol)
+    new_protocol = protocol.get("model", {}).get("adapter") is not None
     server, model = runtime.pinned_paths(protocol)
     metadata["runtime_files_verified"] = {
         "archive_sha256": runtime.ARCHIVE_SHA256,
@@ -302,6 +384,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
     }
     if runtime.sha256_file(model) != protocol["model"]["artifact"]["sha256"]:
         raise DataError("model artifact SHA-256 mismatch", 2)
+    if new_protocol:
+        runtime.verify_chat_template(protocol, model)
     _check_runtime_version(server)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
@@ -339,7 +423,17 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         settings = {name: protocol["sampling"][name]["value"] for name in
                     ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty")}
         settings["max_tokens"] = protocol["sampling"]["max_output_tokens"]["value"]
-        timeout = runtime.generation_timeout(settings["max_tokens"])
+        template_args = runtime.template_arguments(protocol) if new_protocol else {}
+        stop = protocol["sampling"]["stop"]["value"] if new_protocol else None
+        if new_protocol:
+            reasoning_flag, _ = adapter.settings(protocol["reasoning_mode"]["value"])
+            metadata["effective"] = {"reasoning": {"mode": protocol["reasoning_mode"]["value"],
+                                                    "server_flag": reasoning_flag},
+                                     "template_args": template_args,
+                                     "sampling": {**settings, "stop": stop,
+                                                  "context_length": protocol["sampling"]["context_length"]["value"]}}
+            write_json(directory / "run.json", metadata)
+        timeout = (None if new_protocol else runtime.generation_timeout(settings["max_tokens"]))
         attempt["generation_timeout_seconds"] = timeout
         metadata["generation_timeout_seconds"] = timeout
         write_json(directory / "run.json", metadata)
@@ -352,9 +446,20 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         continue
                     seed = metadata["seeds"][sample]
                     started = time.monotonic()
+                    payload = {"model": adapter.alias, "messages": messages,
+                               "seed": seed, "stream": False, **settings}
+                    if new_protocol:
+                        payload["add_generation_prompt"] = True
+                        payload["chat_template_kwargs"] = template_args
+                        payload["stop"] = stop
+                        try:
+                            rendered_prompt = runtime.render_prompt(port, key, messages, protocol)
+                        except runtime.RuntimeErrorWithCode as error:
+                            raise DataError(str(error), error.code) from error
+                    else:
+                        rendered_prompt = prompt
                     status, body = _generation_response(
-                        port, key, {"model": runtime.ALIAS, "messages": messages,
-                                    "seed": seed, "stream": False, **settings}, timeout)
+                        port, key, payload, timeout)
                     if status != 200:
                         raise DataError(f"generation returned HTTP {status}", 1)
                     try:
@@ -372,20 +477,26 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         raise DataError("generation content is not text", 1)
                     reason = choice.get("finish_reason")
                     truncated = reason == "length"
-                    thinking, extraction = extract_raw(raw, truncated)
+                    if new_protocol:
+                        thinking, thinking_state, extraction = extract_raw_with_state(raw, truncated, adapter)
+                    else:
+                        thinking, extraction = extract_raw(raw, truncated)
                     answer, reference = extraction["answer"], source["answer"]
                     verdicts = {
                         "primary": score_primary(answer, reference)["correct"],
                         "secondary": score_secondary(answer, reference)["correct"],
                     }
                     record = {"item_id": item_id, "sample_index": sample, "seed": seed,
-                              "prompt_sha256": sha256_bytes(prompt.encode("utf-8")),
+                              "prompt_sha256": sha256_bytes(rendered_prompt.encode("utf-8")),
                               "raw_output": raw, "raw_output_sha256": sha256_bytes(raw.encode("utf-8")),
                               "thinking_present": thinking, "truncated": truncated,
                               "finish_reason": reason, "tokens_generated": response.get("usage", {}).get("completion_tokens"),
                               "reference_answer": reference, "reference_sha256": sha256_bytes(reference.encode("utf-8")),
                               "extraction": extraction, "verdicts": verdicts,
                               "timing_ms": round((time.monotonic() - started) * 1000)}
+                    if new_protocol:
+                        record.update(thinking_state=thinking_state, infra_retries=0,
+                                      awake_ms=record["timing_ms"])
                     stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                     stream.flush()
                     os.fsync(stream.fileno())

@@ -19,6 +19,8 @@ from typing import Any
 import yaml
 
 from .data import cache_root, runs_root
+from .gguf_metadata import chat_template as gguf_chat_template
+from . import model_adapters
 from ._runtime_pin import ARCHIVE_SHA256, REGULAR_SHA256, SYMLINK_TARGETS
 
 
@@ -257,7 +259,8 @@ def pinned_paths(protocol: dict[str, Any]) -> tuple[Path, Path]:
     try:
         runtime = protocol["runtime"]
         artifact = protocol["model"]["artifact"]
-        if runtime["build"] != BUILD or runtime["model_alias"] != ALIAS:
+        adapter = model_adapters.from_protocol(protocol)
+        if runtime["build"] != BUILD or runtime["model_alias"] != adapter.alias:
             raise ValueError("runtime build or model alias differs from the pin")
         name = artifact["file"]
         if name != Path(name).name:
@@ -273,6 +276,28 @@ def pinned_paths(protocol: dict[str, Any]) -> tuple[Path, Path]:
         raise RuntimeErrorWithCode("pinned runtime or model artifact is missing", 3)
     verify_runtime_files(server.parent)
     return server, model
+
+
+def verify_chat_template(protocol: dict[str, Any], model: Path) -> str | None:
+    """Compare a new model's embedded template with both approved source and protocol."""
+    try:
+        adapter = model_adapters.from_protocol(protocol)
+    except ValueError as error:
+        raise RuntimeErrorWithCode(str(error), 3) from error
+    if protocol.get("model", {}).get("adapter") is None:
+        return None  # v0.7 Qwen3 files did not declare a template hash.
+    declared = protocol.get("model", {}).get("chat_template")
+    if (not isinstance(declared, dict) or declared.get("source") != "embedded"
+            or declared.get("sha256") != adapter.template_sha256):
+        raise RuntimeErrorWithCode("chat template pin differs from approved source", 2)
+    try:
+        embedded = gguf_chat_template(model)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise RuntimeErrorWithCode(f"embedded chat template unavailable: {error}", 2) from error
+    actual = hashlib.sha256(embedded.encode("utf-8")).hexdigest()
+    if actual != declared["sha256"]:
+        raise RuntimeErrorWithCode("embedded chat template SHA-256 mismatch", 2)
+    return actual
 
 
 def generation_timeout(max_tokens: int) -> int:
@@ -338,12 +363,21 @@ def _sampling_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
 def server_arguments(server: Path, model: Path, port: int,
                      protocol: dict[str, Any]) -> list[str]:
     runtime = protocol["runtime"]
+    try:
+        adapter = model_adapters.from_protocol(protocol)
+        reasoning_arg, _ = adapter.settings(protocol.get("reasoning_mode", {}).get("value", "hybrid"))
+    except ValueError as error:
+        raise RuntimeErrorWithCode(str(error), 3) from error
     if runtime.get("host") != "127.0.0.1" or runtime.get("port") != "ephemeral":
         raise RuntimeErrorWithCode("runtime must use loopback and an ephemeral port", 3)
     if runtime.get("ui") is not False or runtime.get("reasoning_format") != "none":
         raise RuntimeErrorWithCode("runtime must disable the UI and reasoning parsing", 3)
     try:
         context = int(runtime["context_size"])
+        context_setting = protocol.get("sampling", {}).get("context_length")
+        if context_setting is not None:
+            if not isinstance(context_setting, dict) or context_setting.get("value") != context:
+                raise ValueError("context_length differs from runtime context_size")
         threads = int(runtime["threads"])
         threads_batch = int(runtime["threads_batch"])
         batch_size = int(runtime["batch_size"])
@@ -370,11 +404,7 @@ def server_arguments(server: Path, model: Path, port: int,
             or runtime.get("load_mode") != "mmap" or runtime.get("context_shift") is not False
             or runtime.get("jinja") is not True or runtime.get("reasoning_budget") != -1):
         raise RuntimeErrorWithCode("unsupported runtime settings in protocol", 3)
-    reasoning = protocol.get("reasoning_mode", {}).get("value")
-    if reasoning not in ("hybrid", "forced_think", "forced_non_think"):
-        raise RuntimeErrorWithCode("invalid reasoning mode", 3)
-    reasoning_arg = {"hybrid": "auto", "forced_think": "on", "forced_non_think": "off"}[reasoning]
-    return [str(server), "--model", str(model), "--alias", ALIAS,
+    return [str(server), "--model", str(model), "--alias", adapter.alias,
             "--log-verbosity", str(SERVER_LOG_VERBOSITY),
             "--host", "127.0.0.1", "--port", str(port),
             "--threads", str(threads), "--threads-batch", str(threads_batch),
@@ -388,7 +418,7 @@ def server_arguments(server: Path, model: Path, port: int,
             "--reasoning-format", "none", "--no-webui"]
 
 
-def _check_exempt_body(path: str, body: bytes, model: Path) -> bool:
+def _check_exempt_body(path: str, body: bytes, model: Path, alias: str = ALIAS) -> bool:
     content = body.decode("utf-8", errors="replace").lower()
     if any(marker in content for marker in
            (str(model).lower(), "/private/", "/users/", "prompt", "output",
@@ -398,7 +428,7 @@ def _check_exempt_body(path: str, body: bytes, model: Path) -> bool:
         try:
             response = json.loads(body)
             entries = response["data"]
-            return bool(entries) and all(item["id"] == ALIAS for item in entries)
+            return bool(entries) and all(item["id"] == alias for item in entries)
         except (ValueError, KeyError, TypeError):
             return False
     return True
@@ -425,6 +455,31 @@ def _stream_content(body: bytes) -> str:
     return "".join(pieces)
 
 
+def template_arguments(protocol: dict[str, Any]) -> dict[str, Any]:
+    adapter = model_adapters.from_protocol(protocol)
+    _, arguments = adapter.settings(protocol.get("reasoning_mode", {}).get("value", "hybrid"))
+    return arguments
+
+
+def render_prompt(port: int, key: str, messages: list[dict[str, str]],
+                  protocol: dict[str, Any]) -> str:
+    """Get the exact prompt from the keyed server, including template inserts."""
+    payload: dict[str, Any] = {"messages": messages, "add_generation_prompt": True}
+    arguments = template_arguments(protocol)
+    if arguments:
+        payload["chat_template_kwargs"] = arguments
+    status, body = request(port, "POST", "/apply-template", key, payload)
+    if status != 200:
+        raise RuntimeErrorWithCode(f"template rendering returned HTTP {status}", 4)
+    try:
+        prompt = json.loads(body)["prompt"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise RuntimeErrorWithCode("template rendering response is malformed", 4) from error
+    if not isinstance(prompt, str) or not prompt:
+        raise RuntimeErrorWithCode("template rendering returned no prompt", 4)
+    return prompt
+
+
 def _fixture_checks(port: int, key: str, protocol: dict[str, Any]) -> dict[str, Any]:
     """Check request mapping and byte-exact content capture with a tiny fixture."""
     try:
@@ -436,17 +491,24 @@ def _fixture_checks(port: int, key: str, protocol: dict[str, Any]) -> dict[str, 
         raise RuntimeErrorWithCode(f"incomplete sampling protocol: {error}", 3) from error
     fixture_parameters = dict(configured)
     fixture_parameters.update(temperature=0, max_tokens=16)
+    adapter = model_adapters.from_protocol(protocol)
     payload: dict[str, Any] = {
-        "model": ALIAS, "messages": [{"role": "user", "content": "Reply with 391."}],
+        "model": adapter.alias, "messages": [{"role": "user", "content": "Reply with 391."}],
         "seed": 42, **fixture_parameters,
     }
+    arguments = template_arguments(protocol)
+    if arguments:
+        payload["chat_template_kwargs"] = arguments
+    stop = protocol.get("sampling", {}).get("stop")
+    if stop is not None:
+        payload["stop"] = stop["value"]
     status, body = request(port, "POST", "/v1/chat/completions", key,
                            {**payload, "stream": False})
     if status != 200:
         raise RuntimeErrorWithCode(f"fixture generation returned HTTP {status}", 4)
     confirmed = confirm_sampling(port, key, {"seed": 42, **fixture_parameters})
     response = json.loads(body)
-    if response.get("model") != ALIAS:
+    if response.get("model") != adapter.alias:
         raise RuntimeErrorWithCode("fixture response model alias mismatch", 4)
     content = response["choices"][0]["message"]["content"]
     if not isinstance(content, str) or not content:
@@ -484,8 +546,10 @@ def _fixture_checks(port: int, key: str, protocol: dict[str, Any]) -> dict[str, 
 def verify_runtime(protocol_path: Path) -> Path:
     protocol, protocol_sha = read_protocol(protocol_path)
     server, model = pinned_paths(protocol)
+    alias = model_adapters.from_protocol(protocol).alias
     if sha256_file(model) != protocol["model"]["artifact"]["sha256"]:
         raise RuntimeErrorWithCode("model artifact SHA-256 mismatch", 2)
+    template_sha = verify_chat_template(protocol, model)
     version = subprocess.run([str(server), "--version"], capture_output=True,
                              text=True, timeout=15, check=False)
     if version.returncode or COMMIT[:9] not in version.stdout + version.stderr:
@@ -499,10 +563,12 @@ def verify_runtime(protocol_path: Path) -> Path:
                    if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
     environment["LLAMA_API_KEY"] = key
     record: dict[str, Any] = {
-        "verification_version": "1", "contract_version": "v0.6",
+        "verification_version": "1",
+        "contract_version": ("v0.8.1" if protocol.get("model", {}).get("adapter") else "v0.6"),
         "protocol_sha256": protocol_sha, "runtime_build": BUILD,
         "runtime_commit": COMMIT, "model_artifact_sha256": protocol["model"]["artifact"]["sha256"],
-        "model_alias": ALIAS, "bind": "127.0.0.1", "ephemeral_port": port,
+        "model_alias": alias, "chat_template_sha256": template_sha,
+        "bind": "127.0.0.1", "ephemeral_port": port,
         "routes": [], "web_ui_paths": [], "options_probes": [], "unexpected_open_routes": [],
         "status": "incomplete",
     }
@@ -549,7 +615,7 @@ def verify_runtime(protocol_path: Path) -> Path:
                 row["without_key_body_length"] = len(body)
                 record["web_ui_paths"].append(dict(row))
             if exempt:
-                row["no_sensitive_data"] = _check_exempt_body(path, body, model)
+                row["no_sensitive_data"] = _check_exempt_body(path, body, model, alias)
                 if without != 200 or with_key != 200 or not row["no_sensitive_data"]:
                     record["unexpected_open_routes"].append({"method": method, "path": path})
             elif fixed_not_found:
@@ -585,7 +651,7 @@ def verify_runtime(protocol_path: Path) -> Path:
             }
             expected = {"context_size": int(protocol["runtime"]["context_size"]),
                         "parallel_slots": int(protocol["runtime"]["parallel_slots"]),
-                        "model_alias": ALIAS, "ui": False}
+                        "model_alias": alias, "ui": False}
             record["server_parameter_equivalence"] = {
                 "observed": settings, "expected": expected, "match": settings == expected,
             }
@@ -619,10 +685,12 @@ def verify_runtime(protocol_path: Path) -> Path:
 def verify_artifact(protocol_path: Path) -> Path:
     protocol, protocol_sha = read_protocol(protocol_path)
     server, model = pinned_paths(protocol)
+    alias = model_adapters.from_protocol(protocol).alias
     expected_sha = protocol["model"]["artifact"]["sha256"]
     actual_sha = sha256_file(model)
     if actual_sha != expected_sha:
         raise RuntimeErrorWithCode("model artifact SHA-256 mismatch", 2)
+    template_sha = verify_chat_template(protocol, model)
     version = subprocess.run([str(server), "--version"], capture_output=True,
                              text=True, timeout=15, check=False)
     if version.returncode or COMMIT[:9] not in version.stdout + version.stderr:
@@ -639,7 +707,8 @@ def verify_artifact(protocol_path: Path) -> Path:
     record: dict[str, Any] = {
         "verification_version": "1", "protocol_sha256": protocol_sha,
         "model_artifact_sha256": actual_sha, "runtime_build": BUILD,
-        "runtime_commit": COMMIT, "model_alias": ALIAS, "status": "incomplete",
+        "runtime_commit": COMMIT, "model_alias": alias,
+        "chat_template_sha256": template_sha, "status": "incomplete",
     }
     process = subprocess.Popen(arguments, env=environment, stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -658,7 +727,7 @@ def verify_artifact(protocol_path: Path) -> Path:
         else:
             raise RuntimeErrorWithCode("runtime did not become healthy", 3)
         model_status, model_body = request(port, "GET", "/v1/models")
-        if model_status != 200 or not _check_exempt_body("/v1/models", model_body, model):
+        if model_status != 200 or not _check_exempt_body("/v1/models", model_body, model, alias):
             raise RuntimeErrorWithCode("model listing did not expose only the alias", 4)
         record.update(_fixture_checks(port, key, protocol))
         record["compatible"] = record["raw_capture_fidelity"]["match"]
