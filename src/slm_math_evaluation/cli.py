@@ -23,6 +23,13 @@ def parser() -> Parser:
     build = data_commands.add_parser("build-manifest")
     build.add_argument("--out", required=True, type=Path)
     build.add_argument("--flagged-out", type=Path)
+    subset = data_commands.add_parser("subset")
+    subset.add_argument("--manifest", required=True, type=Path)
+    subset.add_argument("--tier", required=True, choices=("validation",))
+    subset.add_argument("--size", required=True, type=int)
+    subset.add_argument("--stratify", required=True, choices=("subject",))
+    subset.add_argument("--seed", required=True, type=int)
+    subset.add_argument("--out", required=True, type=Path)
     show = data_commands.add_parser("show-pair")
     show.add_argument("--flagged", required=True, type=Path)
     show.add_argument("--pair", required=True, type=int)
@@ -82,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
             paths = data.fetch()
         elif args.data_command == "build-manifest":
             paths = data.build_manifest(args.out, args.flagged_out)
+        elif args.data_command == "subset":
+            paths = [data.build_subset(args.manifest, args.tier, args.size,
+                                       args.stratify, args.seed, args.out)]
         elif args.data_command == "show-pair":
             first, second = data.show_pair(args.flagged, args.pair)
             print(first)

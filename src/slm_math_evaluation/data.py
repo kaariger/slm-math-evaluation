@@ -307,6 +307,59 @@ def draw_tiers(test_rows: list[dict[str, Any]], dev_rows: list[dict[str, Any]],
     return smoke, validation
 
 
+def build_subset(manifest_path: Path, tier: str, size: int, stratify: str,
+                 seed: int, out: Path) -> Path:
+    """Draw IDs from a frozen validation tier using contract v0.8.1 §5.2."""
+    if tier != "validation" or stratify != "subject" or type(size) is not int or size < 0 \
+            or type(seed) is not int:
+        raise DataError("subset requires validation tier, subject stratification, integer size and seed", 3)
+    manifest = read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        raise DataError("manifest must be a mapping", 3)
+    tiers, items = manifest.get("tiers"), manifest.get("items")
+    if not isinstance(tiers, dict) or not isinstance(items, list):
+        raise DataError("manifest lacks tiers or items", 3)
+    tier_ids = tiers.get(tier)
+    if not isinstance(tier_ids, list) or not tier_ids or any(not isinstance(item_id, str) for item_id in tier_ids) \
+            or len(tier_ids) != len(set(tier_ids)):
+        raise DataError("validation tier has no unique IDs", 3)
+    if size > len(tier_ids):
+        raise DataError("subset size exceeds the tier", 3)
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item["id"] in indexed:
+            raise DataError("manifest has malformed or duplicate item IDs", 3)
+        indexed[item["id"]] = item
+    groups: dict[str, list[str]] = defaultdict(list)
+    for item_id in tier_ids:
+        item = indexed.get(item_id)
+        if item is None or item.get("role") != "dev" or not isinstance(item.get("subject"), str) \
+                or not item["subject"]:
+            raise DataError("validation item has no dev subject", 3)
+        groups[item["subject"]].append(item_id)
+
+    total = len(tier_ids)
+    targets = {subject: size * len(pool) // total for subject, pool in groups.items()}
+    remaining = size - sum(targets.values())
+    ranking = sorted(groups, key=lambda subject: (-(size * len(groups[subject]) % total), subject))
+    for subject in ranking[:remaining]:
+        targets[subject] += 1
+    selected = set()
+    for subject in sorted(groups):
+        selected.update(random.Random(seed).sample(groups[subject], targets[subject]))
+    subset = {"subset_version": "1", "manifest_sha256": sha256_file(manifest_path),
+              "tier": tier, "size": size, "stratify": stratify,
+              "method": "largest-remainder allocation by subject, then a seeded draw within each subject",
+              "seed": seed, "ids": [item_id for item_id in tier_ids if item_id in selected]}
+    content = canonical_json(subset)
+    if out.exists():
+        if not out.is_file() or out.read_bytes() != content:
+            raise DataError("subset output already exists with different bytes", 3)
+        return out
+    write_json(out, subset)
+    return out
+
+
 def make_manifest(
     test_rows: list[dict[str, Any]],
     dev_rows: list[dict[str, Any]],
