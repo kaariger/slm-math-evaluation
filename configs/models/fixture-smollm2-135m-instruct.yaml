@@ -1,0 +1,31 @@
+spec_version: "1"
+name: fixture-1
+role: fixture
+source:
+  repo: HuggingFaceTB/SmolLM2-135M-Instruct
+  commit: 12fd25f77366fa6b3b4b768ec3050bf629380bac
+  files:
+    - {path: config.json, sha256: 8eb740e8bbe4cff95ea7b4588d17a2432deb16e8075bc5828ff7ba9be94d982a}
+    - {path: generation_config.json, sha256: 87b916edaaab66b3899b9d0dd0752727dff6666686da0504d89ae0a6e055a013}
+    - {path: merges.txt, sha256: 0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510}
+    - {path: model.safetensors, sha256: 5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c}
+    - {path: special_tokens_map.json, sha256: 2b7379f3ae813529281a5c602bc5a11c1d4e0a99107aaa597fe936c1e813ca52}
+    - {path: tokenizer.json, sha256: 9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c}
+    - {path: tokenizer_config.json, sha256: 4ec77d44f62efeb38d7e044a1db318f6a939438425312dfa333b8382dbad98df}
+    - {path: vocab.json, sha256: 82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79}
+architecture: LlamaForCausalLM
+text_only: true
+template: {inserts_system_message: false, thinking_control: none}
+conversion:
+  tool:
+    release: b10412
+    script_sha256: e38975e1c68d98ac1664dfd530616eb35c72294382a4dd873d4746b23f27779f
+    python_lock_sha256: 068e45ece468b5166f84d297791b0596b97be24710a3e26326aba9b76ed6a103
+  intermediate: bf16
+  quantization: Q4_K_M
+  calibration: none
+expected_sizes_gb: {source: 0.4, intermediate: 0.5, output: 0.2}
+sanity:
+  reference: null
+  perplexity_text_sha256: 6a5f0f0322d941de9d5e0f78be9120b2f44f892328ad2a693b8034bae29b0ec3
+  max_perplexity_ratio: 1.1

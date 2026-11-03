@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import analysis, data, runner, runtime
+from . import analysis, converter, data, runner, runtime
 
 
 class Parser(argparse.ArgumentParser):
@@ -37,6 +37,13 @@ def parser() -> Parser:
     verdicts.add_argument("--manifest", required=True, type=Path)
     verdicts.add_argument("--verdicts", required=True, type=Path)
     verdicts.add_argument("--flagged", type=Path)
+    model = commands.add_parser("model")
+    model_commands = model.add_subparsers(dest="model_command", required=True, parser_class=Parser)
+    convert = model_commands.add_parser("convert")
+    convert.add_argument("--spec", required=True, type=Path)
+    convert.add_argument("--clean-scratch", action="store_true")
+    sanity = model_commands.add_parser("sanity")
+    sanity.add_argument("--spec", required=True, type=Path)
     verify_runtime = commands.add_parser("verify-runtime")
     verify_runtime.add_argument("--protocol", required=True, type=Path)
     verify_artifact = commands.add_parser("verify-artifact")
@@ -75,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
             paths = analysis.report(args.run, args.compare_published, args.sensitivity, args.out_dir)
         elif args.command == "sensitivity":
             paths = [analysis.sensitivity(args.base, args.variant, args.out)]
+        elif args.command == "model":
+            if args.model_command == "convert":
+                paths = converter.convert(args.spec, args.clean_scratch)
+            else:
+                paths = [converter.sanity(args.spec)]
         elif args.command == "run":
             if args.resume:
                 if args.protocol or args.manifest or args.tier or args.k != 1 or args.seed_base != 0:
