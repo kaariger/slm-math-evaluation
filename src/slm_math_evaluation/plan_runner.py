@@ -849,6 +849,11 @@ class Worker:
                 raise _Stopped(2, "stored run identity differs from the plan step")
             if metadata.get("status") == "completed":
                 return
+            if metadata.get("status") in ("in_progress", "interrupted"):
+                # The previous attempt ended without a checkpoint (§6.1, §6.3).
+                attempts = metadata.get("attempts") or [{"n": None}]
+                control.pending.append(("interrupted", {"reason": "previous_attempt_ended",
+                                                        "attempt": attempts[-1]["n"]}))
             torn = _discard_partial_item(directory)
             if torn is not None:
                 control.pending.append(("interrupted", {"reason": "partial_item_write_discarded",

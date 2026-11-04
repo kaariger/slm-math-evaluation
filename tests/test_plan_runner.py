@@ -720,6 +720,9 @@ class PauseAndRecoveryTests(RunnerHarnessCase):
                    if e["type"] == "interrupted" and e["detail"].get("reason") ==
                    "partial_item_write_discarded"]
         self.assertEqual(len(partial), 1)
+        ended = [e["detail"] for e in run.metadata["events"] if e["type"] == "interrupted"
+                 and e["detail"].get("reason") == "previous_attempt_ended"]
+        self.assertEqual(ended, [{"reason": "previous_attempt_ended", "attempt": 1}])
         self.assertEqual([(a["status"], a["resumed_from"]) for a in run.metadata["attempts"]],
                          [("interrupted", None), ("completed", 1)])
         self.assertEqual(h.commands.count(["verify-runtime", "--protocol", PROTOCOL]), 1)
