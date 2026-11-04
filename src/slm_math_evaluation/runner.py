@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import http.client
 import json
 import math
 import os
@@ -126,9 +127,7 @@ def _protocol_check(protocol: dict[str, Any]) -> None:
     if any(not isinstance(setting, dict) or setting.get("provenance") not in PROVENANCE_LABELS
            for setting in settings_with_provenance):
         raise DataError("model protocol has a missing or invalid provenance label", 3)
-    template = protocol["model"].get("chat_template")
-    if (not isinstance(template, dict) or template.get("source") != "embedded"
-            or template.get("sha256") != adapter.template_sha256):
+    if not runtime.template_pin_valid(protocol, adapter):
         raise DataError("model chat template pin is missing or unsupported", 3)
     if adapter.id != "qwen3":
         conversion_hash = protocol["model"]["artifact"].get("conversion_record_sha256")
@@ -233,7 +232,8 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
     return document
 
 
-def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base: int) -> str:
+def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base: int,
+          control: Any = None) -> str:
     if k < 1 or seed_base < 0:
         raise DataError("k must be positive and seed-base nonnegative", 3)
     if not protocol_path.is_file() or not manifest_path.is_file():
@@ -266,11 +266,13 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     (directory / "items.jsonl").touch()
     # Expose the ID before generation so an interrupted run can be resumed.
     print(run_id, flush=True)
-    _generate(directory, metadata, protocol, manifest, ids, set())
+    if control is not None:
+        control.run_created(run_id)
+    _generate(directory, metadata, protocol, manifest, ids, set(), control)
     return run_id
 
 
-def resume(run_id: str) -> str:
+def resume(run_id: str, control: Any = None) -> str:
     run = load_run(run_id)
     if run.metadata.get("status") == "completed":
         raise DataError("completed run is immutable", 3)
@@ -287,11 +289,19 @@ def resume(run_id: str) -> str:
     required = {(item_id, sample) for item_id in ids for sample in range(run.metadata["k"])}
     if not existing <= required:
         raise DataError("stored item/sample pair outside run tier", 2)
-    if not required - existing:
+    remaining = required - existing
+    if control is not None:
+        remaining = {pair for pair in remaining if not control.exhausted(*pair, run.metadata)}
+        if not remaining:
+            # The last pair was recorded before the crash that preceded this resume.
+            run.metadata["status"] = "completed"
+            write_json(run.directory / "run.json", run.metadata)
+            return run_id
+    if not remaining:
         raise DataError("no missing item/sample pairs to resume", 3)
     _source_rows(run.manifest, ids)
     _resource_host_check(run.protocol, _host())
-    _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing)
+    _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing, control)
     return run_id
 
 
@@ -372,11 +382,101 @@ def _generation_response(port: int, key: str, payload: dict[str, Any],
         raise DataError(f"generation response timed out after {timeout} seconds", 1) from error
 
 
+class RunPaused(Exception):
+    """Raised through a controlled run when the plan runner pauses it."""
+
+    def __init__(self, now: bool) -> None:
+        super().__init__("run paused immediately" if now else "run paused after item")
+        self.now = now
+
+
+class RunStopped(Exception):
+    """Raised through a controlled run when a stop rule ends it for the maintainer."""
+
+
+class InfraFailure(Exception):
+    """An infrastructure failure of one item: server error, awake crash, or stuck item."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class Interruption(Exception):
+    """An item lost to sleep or a similar interruption; it never counts as a retry."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _Server:
+    """One keyed, loopback, ephemeral-port server process; restartable with a new key."""
+
+    def __init__(self, server: Path, model: Path, protocol: dict[str, Any],
+                 log_path: Path | None = None) -> None:
+        self.server, self.model, self.protocol, self.log_path = server, model, protocol, log_path
+        self.process: Any = None
+        self.port = 0
+        self.key = ""
+        self.arguments: list[str] = []
+        self.environment: dict[str, str] = {}
+
+    def prepare(self) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            self.port = reservation.getsockname()[1]
+        self.key = secrets.token_urlsafe(32)
+        self.environment = {name: value for name, value in os.environ.items()
+                            if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
+        self.environment["LLAMA_API_KEY"] = self.key
+        self.arguments = runtime.server_arguments(self.server, self.model, self.port, self.protocol)
+
+    def launch(self) -> None:
+        output = self.log_path.open("ab") if self.log_path is not None else subprocess.DEVNULL
+        try:
+            self.process = subprocess.Popen(self.arguments, env=self.environment,
+                                            stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+        finally:
+            if self.log_path is not None:
+                output.close()
+
+    def wait_healthy(self) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise DataError("runtime exited during startup", 3)
+            try:
+                if runtime.request(self.port, "GET", "/health", self.key)[0] == 200:
+                    return
+            except (OSError, TimeoutError):
+                pass
+            time.sleep(.5)
+        raise DataError("runtime did not become healthy", 3)
+
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def stop(self) -> None:
+        # A busy b10412 server answers the first SIGTERM with a graceful shutdown
+        # that can wait on an in-flight request, so escalate to SIGKILL.
+        if self.process is None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=10)
+
+
 def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any],
-              manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]]) -> None:
+              manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]],
+              control: Any = None) -> None:
+    """Generate missing pairs. ``control`` is the plan runner's hook (§13); None is `run`."""
     adapter = model_adapters.from_protocol(protocol)
     new_protocol = protocol.get("model", {}).get("adapter") is not None
-    server, model = runtime.pinned_paths(protocol)
+    server_path, model = runtime.pinned_paths(protocol)
     metadata["runtime_files_verified"] = {
         "archive_sha256": runtime.ARCHIVE_SHA256,
         "regular_files_checked": len(runtime.REGULAR_SHA256),
@@ -386,36 +486,23 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         raise DataError("model artifact SHA-256 mismatch", 2)
     if new_protocol:
         runtime.verify_chat_template(protocol, model)
-    _check_runtime_version(server)
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        port = reservation.getsockname()[1]
-    key = secrets.token_urlsafe(32)
-    environment = {name: value for name, value in os.environ.items()
-                   if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
-    environment["LLAMA_API_KEY"] = key
-    arguments = runtime.server_arguments(server, model, port, protocol)
+    _check_runtime_version(server_path)
+    session = _Server(server_path, model, protocol,
+                      control.server_log if control is not None else None)
+    session.prepare()
     attempt = {"n": len(metadata["attempts"]) + 1, "started": _utc(), "ended": None,
                "status": "interrupted", "resumed_from": metadata["attempts"][-1]["n"] if metadata["attempts"] else None}
     metadata["attempts"].append(attempt)
+    if control is not None:
+        control.bind(directory, metadata, attempt)
     write_json(directory / "run.json", metadata)
-    process = subprocess.Popen(arguments, env=environment, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    session.launch()
+    if control is not None:
+        control.server_started(session)
     previous_signals = runtime.install_cleanup_signals()
     try:
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise DataError("runtime exited during startup", 3)
-            try:
-                if runtime.request(port, "GET", "/health", key)[0] == 200:
-                    break
-            except (OSError, TimeoutError):
-                pass
-            time.sleep(.5)
-        else:
-            raise DataError("runtime did not become healthy", 3)
-        effective = _effective_settings(protocol, port, key, arguments)
+        session.wait_healthy()
+        effective = _effective_settings(protocol, session.port, session.key, session.arguments)
         attempt["effective_runtime_settings"] = effective
         metadata["effective_runtime_settings"] = effective
         write_json(directory / "run.json", metadata)
@@ -437,6 +524,18 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         attempt["generation_timeout_seconds"] = timeout
         metadata["generation_timeout_seconds"] = timeout
         write_json(directory / "run.json", metadata)
+
+        def restart() -> None:
+            session.stop()
+            control.server_stopped(session)
+            session.prepare()
+            session.launch()
+            control.server_started(session)
+            session.wait_healthy()
+            _effective_settings(protocol, session.port, session.key, session.arguments)
+            control.event("server_restart", {"port": session.port})
+
+        total = len(ids) * metadata["k"]
         with (directory / "items.jsonl").open("a", encoding="utf-8") as stream:
             for item_id in ids:
                 source = rows[item_id]
@@ -444,28 +543,70 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                 for sample in range(metadata["k"]):
                     if (item_id, sample) in existing:
                         continue
+                    if control is not None and control.exhausted(item_id, sample):
+                        continue
                     seed = metadata["seeds"][sample]
-                    started = time.monotonic()
                     payload = {"model": adapter.alias, "messages": messages,
                                "seed": seed, "stream": False, **settings}
                     if new_protocol:
                         payload["add_generation_prompt"] = True
                         payload["chat_template_kwargs"] = template_args
                         payload["stop"] = stop
+
+                    def generate_once() -> tuple[str, bytes, dict[str, Any]]:
+                        if new_protocol:
+                            try:
+                                rendered = runtime.render_prompt(session.port, session.key,
+                                                                 messages, protocol)
+                            except runtime.RuntimeErrorWithCode as error:
+                                raise DataError(str(error), error.code) from error
+                        else:
+                            rendered = prompt
+
+                        def send() -> tuple[int, bytes]:
+                            return _generation_response(session.port, session.key, payload, timeout)
+                        status, body = send() if control is None else control.generate(session, send)
+                        if status != 200:
+                            raise DataError(f"generation returned HTTP {status}", 1)
                         try:
-                            rendered_prompt = runtime.render_prompt(port, key, messages, protocol)
+                            confirmed = runtime.confirm_sampling(session.port, session.key,
+                                                                 {"seed": seed, **settings})
                         except runtime.RuntimeErrorWithCode as error:
                             raise DataError(str(error), error.code) from error
+                        return rendered, body, confirmed
+
+                    retries = 0
+                    if control is None:
+                        started = time.monotonic()
+                        rendered_prompt, body, confirmed = generate_once()
+                        timing_ms = awake_ms = round((time.monotonic() - started) * 1000)
                     else:
-                        rendered_prompt = prompt
-                    status, body = _generation_response(
-                        port, key, payload, timeout)
-                    if status != 200:
-                        raise DataError(f"generation returned HTTP {status}", 1)
-                    try:
-                        confirmed = runtime.confirm_sampling(port, key, {"seed": seed, **settings})
-                    except runtime.RuntimeErrorWithCode as error:
-                        raise DataError(str(error), error.code) from error
+                        control.before_item(item_id, sample)
+                        retries = control.retries_used(item_id, sample)
+                        while True:
+                            awake_start, wall_start = control.clock.awake(), control.clock.continuous()
+                            try:
+                                rendered_prompt, body, confirmed = generate_once()
+                                break
+                            except (InfraFailure, Interruption, OSError,
+                                    http.client.HTTPException) as failure:
+                                classified = control.classify(failure, session)
+                            if isinstance(classified, Interruption):
+                                control.interrupted(item_id, sample, classified.reason)
+                                restart()
+                                continue
+                            if not control.infra_failure(item_id, sample, classified.reason,
+                                                         retries, total):
+                                rendered_prompt = None
+                                break
+                            retries += 1
+                            restart()
+                        if rendered_prompt is None:
+                            if not session.alive():
+                                restart()
+                            continue
+                        timing_ms = round((control.clock.continuous() - wall_start) * 1000)
+                        awake_ms = round((control.clock.awake() - awake_start) * 1000)
                     attempt["confirmed_request_sampling"] = confirmed
                     attempt["confirmed_request_count"] = attempt.get("confirmed_request_count", 0) + 1
                     metadata["confirmed_request_sampling"] = confirmed
@@ -493,26 +634,34 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                               "finish_reason": reason, "tokens_generated": response.get("usage", {}).get("completion_tokens"),
                               "reference_answer": reference, "reference_sha256": sha256_bytes(reference.encode("utf-8")),
                               "extraction": extraction, "verdicts": verdicts,
-                              "timing_ms": round((time.monotonic() - started) * 1000)}
+                              "timing_ms": timing_ms}
                     if new_protocol:
-                        record.update(thinking_state=thinking_state, infra_retries=0,
-                                      awake_ms=record["timing_ms"])
+                        record.update(thinking_state=thinking_state, infra_retries=retries,
+                                      awake_ms=awake_ms)
                     stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                     stream.flush()
                     os.fsync(stream.fileno())
+                    if control is not None:
+                        control.item_done(item_id, sample)
         metadata["status"] = "completed"
         attempt["status"] = "completed"
+    except RunPaused:
+        metadata["status"] = "paused"
+        attempt["status"] = "paused"
+        raise
+    except (RunStopped, DataError, runtime.RuntimeErrorWithCode):
+        stopped = control is not None
+        metadata["status"] = "stopped" if stopped else "interrupted"
+        attempt["status"] = "aborted" if stopped else "interrupted"
+        raise
     except BaseException:
         metadata["status"] = "interrupted"
         attempt["status"] = "interrupted"
         raise
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
+        session.stop()
+        if control is not None:
+            control.server_stopped(session)
         runtime.restore_cleanup_signals(previous_signals)
         attempt["ended"] = _utc()
         write_json(directory / "run.json", metadata)

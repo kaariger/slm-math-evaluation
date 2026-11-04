@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from . import analysis, converter, data, runner, runtime
+from . import analysis, converter, data, plan_runner, runner, runtime
 
 
 class Parser(argparse.ArgumentParser):
@@ -44,6 +45,15 @@ def parser() -> Parser:
     convert.add_argument("--clean-scratch", action="store_true")
     sanity = model_commands.add_parser("sanity")
     sanity.add_argument("--spec", required=True, type=Path)
+    plan = commands.add_parser("runner")
+    plan_commands = plan.add_subparsers(dest="runner_command", required=True, parser_class=Parser)
+    plan_start = plan_commands.add_parser("start")
+    plan_start.add_argument("--plan", required=True, type=Path)
+    plan_start.add_argument("--authorization", required=True, type=Path)
+    plan_pause = plan_commands.add_parser("pause")
+    plan_pause.add_argument("--now", action="store_true")
+    plan_commands.add_parser("resume")
+    plan_commands.add_parser("status")
     verify_runtime = commands.add_parser("verify-runtime")
     verify_runtime.add_argument("--protocol", required=True, type=Path)
     verify_artifact = commands.add_parser("verify-artifact")
@@ -82,6 +92,16 @@ def main(argv: list[str] | None = None) -> int:
             paths = analysis.report(args.run, args.compare_published, args.sensitivity, args.out_dir)
         elif args.command == "sensitivity":
             paths = [analysis.sensitivity(args.base, args.variant, args.out)]
+        elif args.command == "runner":
+            if args.runner_command == "start":
+                paths = plan_runner.start(args.plan, args.authorization)
+            elif args.runner_command == "pause":
+                paths = plan_runner.pause(args.now)
+            elif args.runner_command == "resume":
+                paths = plan_runner.resume()
+            else:
+                print(json.dumps(plan_runner.status_report(), indent=2, sort_keys=True))
+                return 0
         elif args.command == "model":
             if args.model_command == "convert":
                 paths = converter.convert(args.spec, args.clean_scratch)

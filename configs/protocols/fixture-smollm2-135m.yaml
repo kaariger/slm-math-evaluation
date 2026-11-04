@@ -1,0 +1,141 @@
+{
+  "protocol_version": "fixture-1-v1",
+  "role": "fixture",
+  "model": {
+    "adapter": {
+      "id": "qwen3",
+      "version": "1.0.0"
+    },
+    "artifact": {
+      "file": "fixture-1-Q4_K_M.gguf",
+      "sha256": "a6da5bd7e3dd3d08d8da8e22449960829cd8d2729833e94420a9734e07fef8ca",
+      "quantization": "Q4_K_M",
+      "conversion_record_sha256": "ef76dbc7fa2ece871ee02753d89628f8bbaf5683445beb288853866556bbdcf8",
+      "provenance": "local-choice"
+    },
+    "chat_template": {
+      "source": "embedded",
+      "sha256": "872be49dbb638044ad01b60388f48d469ff2980e5f0dccdc22ec907db54d0788"
+    }
+  },
+  "runtime": {
+    "build": "b10412",
+    "invocation": "keyed-run-scoped-server",
+    "model_alias": "fixture-1",
+    "host": "127.0.0.1",
+    "port": "ephemeral",
+    "ui": false,
+    "context_size": 2048,
+    "threads": -1,
+    "threads_batch": -1,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "gpu_layers": 99,
+    "flash_attention": true,
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
+    "load_mode": "mmap",
+    "context_shift": false,
+    "parallel_slots": 1,
+    "jinja": true,
+    "reasoning_budget": -1,
+    "reasoning_format": "none",
+    "provenance": "local-choice"
+  },
+  "prompt": {
+    "template": "{problem}\n\nPlease reason step by step, and put your final answer within \\boxed{}.",
+    "system_prompt": null,
+    "few_shot": 0,
+    "provenance": "local-choice"
+  },
+  "reasoning_mode": {
+    "value": "hybrid",
+    "provenance": "local-choice"
+  },
+  "sampling": {
+    "temperature": {
+      "value": 0.6,
+      "provenance": "local-choice"
+    },
+    "top_p": {
+      "value": 0.95,
+      "provenance": "local-choice"
+    },
+    "top_k": {
+      "value": 20,
+      "provenance": "local-choice"
+    },
+    "min_p": {
+      "value": 0,
+      "provenance": "local-choice"
+    },
+    "presence_penalty": {
+      "value": 0,
+      "provenance": "local-choice"
+    },
+    "repeat_penalty": {
+      "value": 1,
+      "provenance": "local-choice"
+    },
+    "max_output_tokens": {
+      "value": 384,
+      "provenance": "local-choice"
+    },
+    "context_length": {
+      "value": 2048,
+      "provenance": "local-choice"
+    },
+    "stop": {
+      "value": [],
+      "provenance": "local-choice"
+    },
+    "seed_policy": {
+      "value": "seed = seed_base + sample_index",
+      "provenance": "local-choice"
+    }
+  },
+  "resources": {
+    "max_memory_gb": {
+      "value": 4,
+      "provenance": "local-choice"
+    },
+    "min_free_memory_gb": {
+      "value": 1,
+      "provenance": "local-choice"
+    },
+    "stuck_after_awake_s": {
+      "value": 60,
+      "provenance": "local-choice"
+    }
+  },
+  "extraction": {
+    "id": "boxed-last-v1",
+    "version": "1.0.0"
+  },
+  "scorers": {
+    "primary": {
+      "id": "prm800k-grader",
+      "pin": "7ecc794703b2877f63226f2477a49b34f9b25163"
+    },
+    "secondary": {
+      "id": "math-verify",
+      "pin": "0.8.0"
+    }
+  },
+  "dataset": {
+    "source": {
+      "url": "https://github.com/openai/prm800k",
+      "commit": "7ecc794703b2877f63226f2477a49b34f9b25163",
+      "files": [
+        {
+          "path": "prm800k/math_splits/test.jsonl",
+          "sha256": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132"
+        },
+        {
+          "path": "prm800k/math_splits/train.jsonl",
+          "sha256": "90d96daeac3fe343ebb1e22ce93dd99690f75983e957f88de42f87cffe1e8076"
+        }
+      ]
+    }
+  }
+}

@@ -278,6 +278,23 @@ def pinned_paths(protocol: dict[str, Any]) -> tuple[Path, Path]:
     return server, model
 
 
+def template_pin_valid(protocol: dict[str, Any], adapter: Any) -> bool:
+    """Targets pin their approved source template; a fixture pins its own file's.
+
+    A fixture (§4) is never reported and has no approved source template, so its
+    protocol declares the SHA-256 of the template embedded in its converted file.
+    That hash is still verified against the file before every use.
+    """
+    declared = protocol.get("model", {}).get("chat_template")
+    if not isinstance(declared, dict) or declared.get("source") != "embedded":
+        return False
+    digest = declared.get("sha256")
+    if protocol.get("role", "target") == "fixture":
+        return (isinstance(digest, str) and len(digest) == 64
+                and all(character in "0123456789abcdef" for character in digest))
+    return digest == adapter.template_sha256
+
+
 def verify_chat_template(protocol: dict[str, Any], model: Path) -> str | None:
     """Compare a new model's embedded template with both approved source and protocol."""
     try:
@@ -287,8 +304,7 @@ def verify_chat_template(protocol: dict[str, Any], model: Path) -> str | None:
     if protocol.get("model", {}).get("adapter") is None:
         return None  # v0.7 Qwen3 files did not declare a template hash.
     declared = protocol.get("model", {}).get("chat_template")
-    if (not isinstance(declared, dict) or declared.get("source") != "embedded"
-            or declared.get("sha256") != adapter.template_sha256):
+    if not template_pin_valid(protocol, adapter):
         raise RuntimeErrorWithCode("chat template pin differs from approved source", 2)
     try:
         embedded = gguf_chat_template(model)
