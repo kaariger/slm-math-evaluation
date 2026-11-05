@@ -19,6 +19,8 @@ class StoredRun:
     protocol: dict[str, Any]
     manifest: dict[str, Any]
     items: list[dict[str, Any]]
+    # The run-start byte copy of a §5.2 subset, bound by ``run.json`` ``subset_sha256``.
+    subset: dict[str, Any] | None = None
 
 
 def load_run(run_id: str) -> StoredRun:
@@ -46,6 +48,18 @@ def load_run(run_id: str) -> StoredRun:
         raise DataError(f"invalid run copy: {error}", 2) from error
     if not isinstance(protocol, dict) or not isinstance(manifest, dict):
         raise DataError("invalid run copy shape", 2)
+    subset = None
+    if metadata.get("subset_sha256") is not None:
+        try:
+            content = (directory / "subset.json").read_bytes()
+        except FileNotFoundError as error:
+            raise DataError("run copy missing: subset.json", 3) from error
+        if sha256_bytes(content) != metadata["subset_sha256"]:
+            raise DataError("run copy SHA-256 mismatch: subset.json", 2)
+        try:
+            subset = json.loads(content)
+        except ValueError as error:
+            raise DataError(f"invalid run copy: {error}", 2) from error
     items = []
     try:
         with (directory / "items.jsonl").open(encoding="utf-8") as stream:
@@ -66,7 +80,7 @@ def load_run(run_id: str) -> StoredRun:
     pairs = [(row.get("item_id"), row.get("sample_index")) for row in items]
     if len(set(pairs)) != len(pairs):
         raise DataError("duplicate item/sample pair", 2)
-    return StoredRun(directory, metadata, protocol, manifest, items)
+    return StoredRun(directory, metadata, protocol, manifest, items, subset)
 
 
 def write_text(path: Path, content: str) -> None:

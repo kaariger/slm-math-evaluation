@@ -128,6 +128,45 @@ class ModelAdapterTests(unittest.TestCase):
                     runtime.verify_chat_template(protocol, path)
                 self.assertEqual(caught.exception.code, 2)
 
+    def test_fixture_pins_its_own_embedded_template_and_targets_do_not(self) -> None:
+        """Recovery ruling 2: a fixture's own pin is checked against the actual bytes."""
+        root = Path(__file__).parents[1]
+        protocol = json.loads((root / "configs/protocols/fixture-smollm2-135m.yaml").read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "fixture.gguf"
+            _tiny_gguf(path, "fixture-owned template")
+            pinned = hashlib.sha256(b"fixture-owned template").hexdigest()
+            self.assertNotEqual(pinned, model_adapters.QWEN_TEMPLATE_SHA256)
+            protocol["model"]["chat_template"]["sha256"] = pinned
+            runner._protocol_check(protocol)
+            self.assertEqual(runtime.verify_chat_template(protocol, path), pinned)
+            # The fixture's own pin still refuses different template bytes.
+            _tiny_gguf(path, "fixture-owned template, changed")
+            with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
+                runtime.verify_chat_template(protocol, path)
+            self.assertEqual(caught.exception.code, 2)
+            # An unpinned fixture template is refused before any byte check.
+            for digest in (None, "", "A" * 64):
+                protocol["model"]["chat_template"]["sha256"] = digest
+                with self.assertRaises(DataError) as caught:
+                    runner._protocol_check(protocol)
+                self.assertEqual(caught.exception.code, 3)
+                with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
+                    runtime.verify_chat_template(protocol, path)
+                self.assertEqual(caught.exception.code, 2)
+            # The same self-pin on a target is refused: targets keep the approved pin.
+            _tiny_gguf(path, "fixture-owned template")
+            target = json.loads(json.dumps(protocol))
+            target["role"] = "target"
+            target["runtime"]["model_alias"] = "qwen3-8b"
+            target["model"]["chat_template"]["sha256"] = pinned
+            with self.assertRaises(DataError) as caught:
+                runner._protocol_check(target)
+            self.assertEqual(caught.exception.code, 3)
+            with self.assertRaises(runtime.RuntimeErrorWithCode) as caught:
+                runtime.verify_chat_template(target, path)
+            self.assertEqual(caught.exception.code, 2)
+
     def test_keyed_template_arguments_and_new_protocol_values(self) -> None:
         protocol = _protocol("gemma-4-12b", "thinking_off")
         protocol["sampling"]["top_k"]["value"] = 0

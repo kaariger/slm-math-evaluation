@@ -20,6 +20,8 @@ from typing import Any, Sequence
 RUNTIME_BUILD = 10412
 RUNTIME_COMMIT = "0d0bfcd4fd8828e3e7906b6fc4561725b534511e"
 RUNTIME_COMMIT_SHORT = RUNTIME_COMMIT[:9]
+HF_CREDENTIAL_VARIABLES = ("HF_TOKEN", "HF_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN",
+                           "HUGGINGFACE_TOKEN")
 RUNTIME_ARCHIVE_FILENAME = f"llama-b{RUNTIME_BUILD}-bin-macos-arm64.tar.gz"
 RUNTIME_ARCHIVE_SHA256 = (
     "94f48fad6d22117f0c85524cd8b76dab482902aedde30f628f91bc7c4ac9135c"
@@ -59,11 +61,12 @@ def require_digest(path: Path, expected: str, label: str) -> None:
 
 def run_checked(command: Sequence[str], timeout: int) -> subprocess.CompletedProcess[str]:
     # llama.cpp reads LLAMA_ARG_* settings from the environment; drop them so
-    # only the explicit arguments configure the pinned runtime.
+    # only the explicit arguments configure the pinned runtime. The local model
+    # run needs no Hugging Face credential, so none is inherited.
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith("LLAMA_ARG_")
+        if not key.startswith("LLAMA_ARG_") and key not in HF_CREDENTIAL_VARIABLES
     }
     # A new session lets a timeout stop grandchildren too, such as llama-cli
     # running under /usr/bin/time with its ephemeral loopback server.

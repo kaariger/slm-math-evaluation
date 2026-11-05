@@ -14,8 +14,19 @@ its exit code. The `slm-eval run` command path is unchanged.
 - **Manifest.** A run step pins `manifest_sha256` but names no path. The runner
   reads the one committed manifest at `configs/datasets/math500-manifest-v1.json`
   and checks its hash. Nothing is searched for.
-- **Subsets.** A run step with a non-null `subset_sha256` exits `3` at start,
-  because `run --subset` is not implemented yet.
+- **Subsets.** A run step pins `subset_sha256` but names no path. A non-null
+  value must equal the SHA-256 of the one committed subset,
+  `configs/datasets/math500-validation-subset-50-seed-20261027-v1.json`
+  (exit `2`; a missing file exits `3`). Nothing is searched for. `runner start`
+  and the step itself also check the subset's §5.2 binding: its
+  `manifest_sha256` and `tier` must match the step (exit `2`), and its IDs must
+  be an ordered subset of that tier (exit `2`). A malformed subset exits `3`.
+- **Subset runs.** `slm-eval run --subset <subset.json>` generates only the
+  subset's IDs, in tier order. The run directory keeps a byte copy,
+  `subset.json`, whose SHA-256 is `run.json` `subset_sha256`. `resume` and
+  `report` read only that copy; a changed copy exits `2` and a missing one `3`.
+  A resumed plan step also checks that `run.json` binds the step's subset. A
+  v0.7 protocol, which has no adapter, keeps v0.7 behavior: `--subset` exits `3`.
 - **Start checks.** In addition to the three §13.2 bindings, `runner start`
   makes these checks:
   - Every pinned repository input exists (exit `3`) and matches its hash
@@ -73,6 +84,23 @@ its exit code. The `slm-eval run` command path is unchanged.
 - **Server log.** The model server's log goes to `server.log`. Each time the
   server stops, the log is scanned for the key. A match is redacted, and the
   plan stops with exit `4`.
+- **Credentials.** Only the converter's own Hugging Face requests use a download
+  credential (§12.5). No child process inherits `HF_TOKEN`, `HF_HUB_TOKEN`,
+  `HUGGING_FACE_HUB_TOKEN` or `HUGGINGFACE_TOKEN`. This covers every model
+  server and `--version` probe, from `run`, `verify-runtime`, `verify-artifact`
+  and the runner, as well as the converter's dependency check, conversion,
+  quantization and perplexity tools. The runner's `verify` and `report` command
+  children also get none. Its `convert` and `sanity` children keep the
+  environment, because they download from the pinned sources.
+- **Report counts.** For v0.8 runs, `report` adds the §7 counts:
+  - missing final answers (extraction status `no_answer` or `truncated`);
+  - infrastructure failures (pairs that exhausted their retries);
+  - `interrupted` events in `run.json`.
+
+  Exhausted pairs are never written to `items.jsonl`. They are neither wrong
+  answers nor part of an accuracy denominator, and `completeness` counts them
+  as missing. A subset run reports the subset's size as its expected item count.
+  Reports of v0.7 runs are unchanged.
 
 ## Fixture verification
 
@@ -116,13 +144,27 @@ fault injection with a fake keyed server and an injected clock. It covers:
 
 ## Limits
 
-- The §7 report counts of infrastructure failures, missing final answers and
-  interruptions are not added yet.
+- The §7 distribution of `thinking_state` across interruptions is not reported.
+  An interrupted generation is never recorded (§6.1), so its own thinking state
+  is unknown. Which records the distribution should cover awaits a contract
+  clarification.
+- A direct `slm-eval run` records no `interrupted` event when it is
+  interrupted, so its interruption count is `0`. Only runner steps record these
+  events.
+- Subset mechanics are verified on synthetic tiers only. No fixture or target
+  model has run on the validation subset.
 - Sleep, lid close and power loss on real hardware were not exercised. As
   §13.5 provides, sleep gaps use injected-clock tests, and proof-run records
   remain the Coordinator's.
 - No infrastructure fault, memory wait or stuck item occurred in the fixture
   runs. Those paths are verified by fault injection only.
 - The runner relies on the converter's disk floors. It does not check the
-  free space of the run-store volume itself.
+  free space of the run-store volume itself, and the contract defines no
+  run-store floor. A failed run-store write is handled as an interruption. Fault
+  injection of a short `items.jsonl` write (`ENOSPC`) leaves the plan
+  `interrupted`, with the server stopped and the sleep lock released. `resume`
+  drops the torn line and regenerates only that item. By inspection only, not
+  fault injection: if the attempt log or `status.json` can't be written either,
+  the worker exits in state `running`, and `resume` records that as an
+  interruption.
 - Delivery of notifications was not confirmed.

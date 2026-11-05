@@ -38,6 +38,9 @@ REPO = Path(__file__).resolve().parents[2]
 # A plan pins the manifest only by hash. The repository holds one split
 # manifest (§2), so run steps read it from this fixed path; nothing is searched.
 MANIFEST = "configs/datasets/math500-manifest-v1.json"
+# Likewise a run step pins a subset only by hash. The repository holds one committed
+# subset (§5.2); a non-null subset_sha256 must match its bytes. Nothing is searched.
+SUBSET = "configs/datasets/math500-validation-subset-50-seed-20261027-v1.json"
 ZERO = "0" * 64
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -307,9 +310,6 @@ def check_inputs(steps: list[dict[str, Any]], bindings: dict[str, Any],
                 raise DataError(f"plan step {number}: {name} is missing: {step[name]}", 3)
             if sha256_file(path) != step[digest]:
                 raise DataError(f"plan step {number}: {name} SHA-256 differs from the plan", 2)
-        if step["type"] == "run" and step["subset_sha256"] is not None:
-            raise DataError(f"plan step {number}: subset runs are not supported by this "
-                            "runner revision", 3)
         if "protocol" in step:
             protocol = _read_protocol(REPO / step["protocol"], number)
             if protocol["model"]["artifact"]["sha256"] not in bindings["artifacts"]:
@@ -327,7 +327,25 @@ def check_inputs(steps: list[dict[str, Any]], bindings: dict[str, Any],
             if protocol["model"].get("adapter") is None or not isinstance(protocol.get("resources"), dict):
                 raise DataError(f"plan step {number}: run steps need a protocol with an "
                                 "adapter and resources (§4)", 3)
+            if step["subset_sha256"] is not None:
+                _plan_subset_ids(number, step, protocol)
     return protocols
+
+
+def _plan_subset_ids(number: int, step: dict[str, Any], protocol: dict[str, Any]) -> list[str]:
+    """The committed subset's IDs, after its hash and its §5.2 binding to the step."""
+    path = REPO / SUBSET
+    if not path.is_file():
+        raise DataError("committed subset is missing", 3)
+    content = path.read_bytes()
+    if sha256_bytes(content) != step["subset_sha256"]:
+        raise DataError(f"plan step {number}: subset SHA-256 differs from the plan", 2)
+    try:
+        subset = json.loads(content)
+    except ValueError as error:
+        raise DataError(f"plan step {number}: subset is not JSON: {error}", 3) from error
+    tier_ids = runner._identity(protocol, data.read_json(REPO / MANIFEST), step["tier"])
+    return data.subset_ids(subset, step["manifest_sha256"], step["tier"], tier_ids)
 
 
 def check_smoke_first(steps: list[dict[str, Any]], protocols: dict[int, dict[str, Any]]) -> None:
@@ -768,11 +786,14 @@ class Worker:
             raise _Stopped(error.code, str(error)) from error
 
     # Steps
-    def _command(self, number: int, arguments: list[str], interrupt_on_error: bool = False) -> None:
+    def _command(self, number: int, arguments: list[str], interrupt_on_error: bool = False,
+                 downloads: bool = False) -> None:
+        """Run one ``slm-eval`` command child; only downloading steps keep HF credentials."""
         command = [sys.executable, "-m", "slm_math_evaluation.cli", *arguments]
+        environment = None if downloads else runtime.credential_free_environment()
         with self.state.runner_log.open("ab") as log:
             process = self.deps.popen(command, cwd=REPO, stdin=subprocess.DEVNULL, stdout=log,
-                                      stderr=log, start_new_session=True)
+                                      stderr=log, start_new_session=True, env=environment)
         self.record_process("step", process.pid, ["slm_math_evaluation.cli", arguments[0]])
         try:
             while process.poll() is None:
@@ -809,10 +830,12 @@ class Worker:
 
     def _step_convert(self, number: int, step: dict[str, Any]) -> None:
         # A failed download is a lost network, an interruption; resume retries it.
-        self._command(number, ["model", "convert", "--spec", step["spec"]], interrupt_on_error=True)
+        self._command(number, ["model", "convert", "--spec", step["spec"]],
+                      interrupt_on_error=True, downloads=True)
 
     def _step_sanity(self, number: int, step: dict[str, Any]) -> None:
-        self._command(number, ["model", "sanity", "--spec", step["spec"]])
+        # A sanity reference file is downloaded from its pinned source (§12.4).
+        self._command(number, ["model", "sanity", "--spec", step["spec"]], downloads=True)
 
     def _step_verify(self, number: int, step: dict[str, Any]) -> None:
         self._command(number, ["verify-runtime", "--protocol", step["protocol"]])
@@ -831,19 +854,24 @@ class Worker:
         protocol_path, manifest_path = REPO / step["protocol"], REPO / MANIFEST
         protocol = yaml.safe_load(protocol_path.read_bytes())
         manifest = data.read_json(manifest_path)
-        total = len(runner._identity(protocol, manifest, step["tier"])) * step["k"]
+        if step["subset_sha256"] is None:
+            subset_path, ids = None, runner._identity(protocol, manifest, step["tier"])
+        else:
+            subset_path, ids = REPO / SUBSET, _plan_subset_ids(number, step, protocol)
+        total = len(ids) * step["k"]
         control = PlanControl(self, number, protocol, total)
         run_id = self.state.status().get("step_runs", {}).get(str(number))
         try:
             if run_id is None:
                 self.update(progress={"done": 0, "total": total})
                 runner.start(protocol_path, manifest_path, step["tier"], step["k"],
-                             step["seed_base"], control=control)
+                             step["seed_base"], control=control, subset_path=subset_path)
                 return
             directory = data.runs_root() / run_id
             metadata = data.read_json(directory / "run.json")
             expected = {"protocol_sha256": step["protocol_sha256"],
                         "manifest_sha256": step["manifest_sha256"], "tier": step["tier"],
+                        "subset_sha256": step["subset_sha256"],
                         "k": step["k"], "seeds": [step["seed_base"] + n for n in range(step["k"])]}
             if any(metadata.get(name) != value for name, value in expected.items()):
                 raise _Stopped(2, "stored run identity differs from the plan step")

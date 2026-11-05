@@ -75,6 +75,7 @@ def parser() -> Parser:
     run.add_argument("--tier", choices=("smoke", "validation", "test"))
     run.add_argument("--k", type=int, default=1)
     run.add_argument("--seed-base", type=int, default=0)
+    run.add_argument("--subset", type=Path)
     run.add_argument("--resume")
     return root
 
@@ -109,13 +110,15 @@ def main(argv: list[str] | None = None) -> int:
                 paths = [converter.sanity(args.spec)]
         elif args.command == "run":
             if args.resume:
-                if args.protocol or args.manifest or args.tier or args.k != 1 or args.seed_base != 0:
+                if (args.protocol or args.manifest or args.tier or args.subset
+                        or args.k != 1 or args.seed_base != 0):
                     raise data.DataError("--resume cannot be combined with run-start options", 3)
                 print(runner.resume(args.resume))
             else:
                 if not (args.protocol and args.manifest and args.tier):
                     raise data.DataError("--protocol, --manifest, and --tier are required", 3)
-                runner.start(args.protocol, args.manifest, args.tier, args.k, args.seed_base)
+                runner.start(args.protocol, args.manifest, args.tier, args.k, args.seed_base,
+                             subset_path=args.subset)
             return 0
         elif args.data_command == "fetch":
             paths = data.fetch()

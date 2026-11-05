@@ -225,6 +225,22 @@ class CommandTests(unittest.TestCase):
         self.assertIn("KEEP_THIS_VARIABLE", names)
         self.assertEqual([name for name in names if name.startswith("LLAMA_ARG_")], [])
 
+    def test_strips_hugging_face_credentials_from_model_children(self) -> None:
+        # Synthetic sentinels only; no real credential is read or needed.
+        sentinels = {name: f"synthetic-sentinel-{index}"
+                     for index, name in enumerate(validator.HF_CREDENTIAL_VARIABLES)}
+        self.assertEqual(set(sentinels), {"HF_TOKEN", "HF_HUB_TOKEN",
+                                          "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_TOKEN"})
+        with mock.patch.dict(os.environ, {**sentinels, "KEEP_THIS_VARIABLE": "1"}):
+            completed = validator.run_checked(
+                [sys.executable, "-c", "import json, os; print(json.dumps(dict(os.environ)))"],
+                timeout=30,
+            )
+        environment = json.loads(completed.stdout)
+        self.assertEqual(environment["KEEP_THIS_VARIABLE"], "1")
+        self.assertFalse(set(sentinels) & set(environment))
+        self.assertFalse(any(value in completed.stdout for value in sentinels.values()))
+
     def test_reports_nonzero_exit(self) -> None:
         command = [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"]
         with self.assertRaisesRegex(validator.ValidationError, "exit code 3(.|\n)*boom"):

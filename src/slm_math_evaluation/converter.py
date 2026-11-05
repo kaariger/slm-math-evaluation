@@ -265,9 +265,9 @@ def _environment(scratch: Path) -> dict[str, str]:
     temp = scratch / "tmp"
     home.mkdir(parents=True, exist_ok=True)
     temp.mkdir(parents=True, exist_ok=True)
-    environment = {key: value for key, value in os.environ.items()
-                   if key not in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "NO_LOCAL_GGUF",
-                                  "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")
+    # The tools run offline from verified local files, so no credential reaches them.
+    environment = {key: value for key, value in runtime.credential_free_environment().items()
+                   if key not in ("NO_LOCAL_GGUF", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")
                    and not key.startswith("LLAMA_ARG_")}
     environment.update(HF_HOME=str(home), HF_HUB_CACHE=str(home / "hub"),
                        TMPDIR=str(temp), TORCH_HOME=str(scratch / "torch"),
@@ -387,12 +387,11 @@ def convert(spec_path: Path, clean_scratch: bool = False) -> list[Path]:
 
 
 def _perplexity(binary: Path, model: Path, text_path: Path) -> float:
-    environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith("LLAMA_ARG_") and key != "LLAMA_API_KEY"}
     result = subprocess.run([str(binary), "--model", str(model), "--file", str(text_path),
                              "--ctx-size", "128", "--device", "none", "--fit", "off",
                              "--n-gpu-layers", "0", "--no-warmup"],
-                            capture_output=True, text=True, env=environment, check=False)
+                            capture_output=True, text=True, env=runtime.llama_environment(),
+                            check=False)
     output = result.stdout + result.stderr
     match = re.search(r"Final estimate: PPL = ([0-9]+(?:\.[0-9]+)?)", output)
     if result.returncode or match is None:

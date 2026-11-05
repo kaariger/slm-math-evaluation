@@ -360,6 +360,32 @@ def build_subset(manifest_path: Path, tier: str, size: int, stratify: str,
     return out
 
 
+SUBSET_FIELDS = {"subset_version", "manifest_sha256", "tier", "size", "stratify",
+                 "method", "seed", "ids"}
+
+
+def subset_ids(subset: Any, manifest_sha256: str, tier: str, tier_ids: list[str]) -> list[str]:
+    """Return a §5.2 subset's IDs after checking its binding to a run's manifest and tier.
+
+    A malformed subset is an unmet precondition (exit 3). A subset bound to another
+    manifest or tier, or whose IDs are not an ordered subset of the tier, is an
+    integrity mismatch (exit 2).
+    """
+    if (not isinstance(subset, dict) or set(subset) != SUBSET_FIELDS
+            or subset["subset_version"] != "1" or not isinstance(subset["ids"], list)
+            or any(not isinstance(item_id, str) for item_id in subset["ids"])
+            or type(subset["size"]) is not int or subset["size"] != len(subset["ids"])
+            or not subset["ids"]):
+        raise DataError("subset does not match contract §5.2", 3)
+    if subset["manifest_sha256"] != manifest_sha256 or subset["tier"] != tier:
+        raise DataError("subset manifest_sha256 or tier does not match the run", 2)
+    selected = set(subset["ids"])
+    if len(selected) != len(subset["ids"]) or [
+            item_id for item_id in tier_ids if item_id in selected] != subset["ids"]:
+        raise DataError("subset IDs are not an ordered subset of the tier", 2)
+    return list(subset["ids"])
+
+
 def make_manifest(
     test_rows: list[dict[str, Any]],
     dev_rows: list[dict[str, Any]],

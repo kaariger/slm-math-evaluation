@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from .data import DataError, read_json, write_json
+from .data import DataError, read_json, subset_ids, write_json
 from . import model_adapters
 from .evaluation import (EXTRACTOR_ID, EXTRACTOR_VERSION, PRIMARY_PIN,
                          SECONDARY_PIN, extract_raw, extract_raw_with_state,
@@ -172,6 +172,8 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
     tier = run.metadata["tier"]
     tier_ids = ([item["id"] for item in run.manifest["items"] if item["role"] == "test"]
                 if tier == "test" else run.manifest.get("tiers", {}).get(tier, []))
+    if run.metadata.get("subset_sha256") is not None:  # load_run checked the copy's hash.
+        tier_ids = subset_ids(run.subset, run.metadata["manifest_sha256"], tier, tier_ids)
     expected_count = len(tier_ids) * run.metadata["k"]
     counts = {
         "format_failures": sum(row["extraction"]["status"] == "no_answer" and not row["truncated"] for row in rows),
@@ -180,6 +182,20 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
         "thinking_rate": sum(bool(row["thinking_present"]) for row in rows) / count,
         "grader_disagreements": sum(row["verdicts"]["primary"] != row["verdicts"]["secondary"] for row in rows),
     }
+    # §7 counts added in v0.8. v0.7 runs keep their unchanged report (§4 compatibility).
+    new_protocol = run.protocol.get("model", {}).get("adapter") is not None
+    if new_protocol:
+        events = run.metadata.get("events", [])
+        # An exhausted pair is never written to items.jsonl, so it is neither a wrong
+        # answer nor part of any accuracy denominator; it is only counted here.
+        exhausted = {(event["detail"].get("item_id"), event["detail"].get("sample_index"))
+                     for event in events if event["type"] == "infra_retry"
+                     and event["detail"].get("exhausted") is True}
+        counts.update(
+            missing_final_answers=sum(row["extraction"]["status"] in ("no_answer", "truncated")
+                                      for row in rows),
+            infrastructure_failures=len(exhausted),
+            interruptions=sum(event["type"] == "interrupted" for event in events))
     document: dict[str, Any] = {
         "report_version": "1", "run_id": run_id, "tier": run.metadata["tier"],
         "k": run.metadata["k"], "protocol_version": run.metadata["protocol_version"],
@@ -196,6 +212,8 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
                            "published figure; not a reproduction." if published is not None else
                            "Evaluation under the study's stated settings; not a reproduction."),
     }
+    if new_protocol:
+        document["subset_sha256"] = run.metadata.get("subset_sha256")
     if published is not None:
         document["comparison"] = _comparison_reading(published, primary, secondary, sensitivity)
         low, high = primary["interval_95"]
@@ -216,6 +234,12 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
              f"Format failures: {counts['format_failures']}; truncations: {counts['truncations']}; "
              f"fallback extractions: {counts['fallback_extractions']}; thinking rate: {counts['thinking_rate']:.6f}; "
              f"grader disagreements: {counts['grader_disagreements']}"]
+    if new_protocol:
+        lines.extend(("", f"Missing final answers: {counts['missing_final_answers']}; "
+                      f"infrastructure failures (not scored): {counts['infrastructure_failures']}; "
+                      f"interruptions: {counts['interruptions']}"))
+        if document["subset_sha256"] is not None:
+            lines.extend(("", f"Subset SHA-256: {document['subset_sha256']}"))
     if "comparison" in document:
         comparison = document["comparison"]
         lines.extend(("", f"Comparison reading: {comparison['reading']}",

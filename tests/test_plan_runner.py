@@ -92,6 +92,7 @@ class FakeServer:
     def __init__(self, harness: "Harness", arguments, environment, stdout) -> None:
         FakeServer.count += 1
         self.pid = 4_000_000 + FakeServer.count
+        self.environment = environment
         self.alive = True
         self.stopped = threading.Event()
         harness.servers.append(self)
@@ -146,6 +147,7 @@ class Harness:
         self.notifications: list[str] = []
         self.servers: list[FakeServer] = []
         self.commands: list[list[str]] = []
+        self.command_envs: list[dict[str, str] | None] = []
         self.command_codes: dict[str, tuple[int, int]] = {}
         self.command_hooks: dict[int, Any] = {}
         self.killed: list[tuple[int, int]] = []
@@ -255,9 +257,10 @@ class Harness:
     def free_memory(self) -> float:
         return self.memory.pop(0) if self.memory else 64.0
 
-    def command_popen(self, command, **_kwargs):
+    def command_popen(self, command, **kwargs):
         arguments = command[3:]
         self.commands.append(arguments)
+        self.command_envs.append(kwargs.get("env"))
         return FakeCommand(self, arguments)
 
     def killpg(self, pid: int, number: int) -> None:
@@ -487,13 +490,23 @@ class PlanValidationTests(RunnerHarnessCase):
         authorization_document["extra"] = True
         authorization.write_text(json.dumps(authorization_document))
         self.assert_exit(3, start, plan, authorization)
-        # A validation tier before this model's smoke tier; a subset run.
+        # A validation tier before this model's smoke tier; a subset run whose
+        # committed subset file is missing (SubsetRunnerTests covers subsets).
         plan, authorization = h.plan(h.steps("verify", "validation", "smoke"))
         self.assert_exit(3, start, plan, authorization)
         subset = h.steps("smoke")
         subset[0]["subset_sha256"] = "f" * 64
         plan, authorization = h.plan(subset, subsets=["f" * 64])
         self.assert_exit(3, start, plan, authorization)
+        # Recovery ruling 3: the plan's manifest hash is checked against the bytes of
+        # the one committed manifest; a changed or missing file is refused.
+        plan, authorization = h.plan(steps)
+        manifest = (h.repo / plan_runner.MANIFEST).read_bytes()
+        h.write(plan_runner.MANIFEST, manifest + b"\n")
+        self.assert_exit(2, start, plan, authorization)
+        (h.repo / plan_runner.MANIFEST).unlink()
+        self.assert_exit(3, start, plan, authorization)
+        h.write(plan_runner.MANIFEST, manifest)
         # A pinned repository file that no longer matches, or is missing.
         plan, authorization = h.plan(steps)
         h.write(PROTOCOL, h.protocol_bytes + b" ")
@@ -603,7 +616,11 @@ class RunnerLifecycleTests(RunnerHarnessCase):
         state.authorization_path.write_bytes(authorization.replace(b"synthetic-fixture", b"someone"))
         self.assert_exit(2, self.resume)
         state.authorization_path.write_bytes(authorization)
-        # A protocol changed after start stops resume with an integrity exit.
+        # A protocol or committed manifest changed after start stops resume.
+        manifest = (h.repo / plan_runner.MANIFEST).read_bytes()
+        h.write(plan_runner.MANIFEST, manifest + b" ")
+        self.assert_exit(2, self.resume)
+        h.write(plan_runner.MANIFEST, manifest)
         h.write(PROTOCOL, h.protocol_bytes + b"\n")
         self.assert_exit(2, self.resume)
         self.assertEqual(h.status()["state"], "paused")
@@ -896,6 +913,236 @@ class InterruptionAndResourceTests(RunnerHarnessCase):
                          ("stopped", 4))
         self.assertIn(b"[redacted]", h.state().server_log.read_bytes())
 
+
+class SubsetRunnerTests(RunnerHarnessCase):
+    """§3 ``run --subset`` and §13.1 subset_sha256, on synthetic tiers only."""
+
+    items = 7
+
+    def setUp(self) -> None:
+        super().setUp()
+        h = self.h
+        manifest = json.loads((h.repo / plan_runner.MANIFEST).read_text())
+        for index, item in enumerate(manifest["items"]):
+            item["subject"] = "Algebra" if index % 2 else "Geometry"
+        manifest["tiers"].update(smoke=h.ids[:2], validation=h.ids[2:])
+        h.write(plan_runner.MANIFEST, json.dumps(manifest).encode())
+        self.subset_path = h.repo / plan_runner.SUBSET
+        data.build_subset(h.repo / plan_runner.MANIFEST, "validation", 3, "subject", 5,
+                          self.subset_path)
+        self.subset_bytes = self.subset_path.read_bytes()
+        self.subset = json.loads(self.subset_bytes)
+        self.subset_sha = _sha(self.subset_bytes)
+        self.inputs = self.root / "inputs"
+        self.inputs.mkdir(exist_ok=True)
+
+    def subset_steps(self, digest: str | None = None) -> list[dict]:
+        steps = self.h.steps("smoke", "validation")
+        steps[1]["subset_sha256"] = digest or self.subset_sha
+        return steps
+
+    def run_directories(self) -> list[Path]:
+        runs = self.root / "runs"
+        return sorted(p for p in runs.iterdir() if not p.name.startswith("_")) if runs.is_dir() else []
+
+    def variant(self, name: str, **changes: Any) -> Path:
+        path = self.inputs / name
+        path.write_bytes(data.canonical_json({**self.subset, **changes}))
+        return path
+
+    def cli_run(self, *extra: str, protocol: Path | None = None, tier: str = "validation") -> int:
+        argv = ["run", "--protocol", str(protocol or self.h.repo / PROTOCOL),
+                "--manifest", str(self.h.repo / plan_runner.MANIFEST), "--tier", tier, *extra]
+        with patch.object(sys, "stderr", io.StringIO()):
+            return cli.main(argv)
+
+    def test_subset_ids_are_an_ordered_strict_subset(self) -> None:
+        validation = self.h.ids[2:]
+        self.assertEqual(len(self.subset["ids"]), 3)
+        self.assertEqual(self.subset["ids"], [i for i in validation if i in self.subset["ids"]])
+
+    def test_plan_subset_run_generates_only_subset_ids(self) -> None:
+        h = self.h
+        self.start(self.subset_steps(), subsets=[self.subset_sha])
+        status = h.status()
+        self.assertEqual((status["state"], status["progress"]), ("completed", {"done": 3, "total": 3}))
+        run = load_run(status["step_runs"]["2"])
+        self.assertEqual(run.metadata["subset_sha256"], self.subset_sha)
+        self.assertEqual((run.directory / "subset.json").read_bytes(), self.subset_bytes)
+        self.assertEqual([row["item_id"] for row in run.items], self.subset["ids"])
+        self.assertEqual([item for item, _ in h.generation_calls], h.ids[:2] + self.subset["ids"])
+        smoke = load_run(status["step_runs"]["1"])
+        self.assertIsNone(smoke.metadata["subset_sha256"])
+        self.assertFalse((smoke.directory / "subset.json").exists())
+
+    def test_paused_subset_run_resumes_from_its_stored_binding(self) -> None:
+        h = self.h
+        h.behaviors[(self.subset["ids"][1], 0)] = "pause_after"
+        self.start(self.subset_steps(), subsets=[self.subset_sha])
+        self.assertEqual(h.status()["state"], "paused")
+        # The committed subset is re-verified on resume (§13.4).
+        h.write(plan_runner.SUBSET, self.subset_bytes + b" ")
+        self.assert_exit(2, self.resume)
+        h.write(plan_runner.SUBSET, self.subset_bytes)
+        self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+        run = load_run(h.status()["step_runs"]["2"])
+        self.assertEqual(sorted(row["item_id"] for row in run.items), sorted(self.subset["ids"]))
+        self.assertEqual([item for item, _ in h.generation_calls], h.ids[:2] + self.subset["ids"])
+        self.assertEqual([(a["status"], a["resumed_from"]) for a in run.metadata["attempts"]],
+                         [("paused", None), ("completed", 1)])
+
+    def test_tampered_stored_subset_binding_stops_the_plan(self) -> None:
+        h = self.h
+        for target in ("copy", "metadata"):
+            with self.subTest(target=target):
+                import shutil
+                shutil.rmtree(self.root / "runs", ignore_errors=True)
+                h.generation_calls.clear()  # Behaviors are keyed by attempt number.
+                h.behaviors = {(self.subset["ids"][0], 0): "pause_after"}
+                self.start(self.subset_steps(), subsets=[self.subset_sha])
+                run = load_run(h.status()["step_runs"]["2"])
+                if target == "copy":
+                    (run.directory / "subset.json").write_bytes(self.subset_bytes + b" ")
+                else:
+                    data.write_json(run.directory / "run.json", {**run.metadata, "subset_sha256": None})
+                self.resume()
+                status = h.status()
+                self.assertEqual((status["state"], status["last_event"]["detail"]["exit_code"]),
+                                 ("stopped", 2))
+
+    def test_plan_start_refuses_unbound_mismatched_or_misbound_subsets(self) -> None:
+        h = self.h
+        bound = {"subsets": [self.subset_sha]}
+        self.assert_exit(2, self.start, self.subset_steps(), subsets=[])          # unbound hash
+        self.assert_exit(2, self.start, self.subset_steps("e" * 64), subsets=["e" * 64])
+        smoke = h.steps("smoke")
+        smoke[0]["subset_sha256"] = self.subset_sha                              # tier differs
+        self.assert_exit(2, self.start, smoke, **bound)
+        for changes, code in (({"manifest_sha256": "e" * 64}, 2), ({"ids": self.subset["ids"][::-1]}, 2),
+                              ({"extra": True}, 3), ({"size": 2}, 3)):
+            with self.subTest(changes=changes):
+                content = data.canonical_json({**self.subset, **changes})
+                h.write(plan_runner.SUBSET, content)
+                self.assert_exit(code, self.start, self.subset_steps(_sha(content)),
+                                 subsets=[_sha(content)])
+        h.write(plan_runner.SUBSET, b"{not json")
+        self.assert_exit(3, self.start, self.subset_steps(_sha(b"{not json")),
+                         subsets=[_sha(b"{not json")])
+        self.assertFalse((self.root / "runs" / "_runner").exists())
+        self.assertEqual(h.generation_calls, [])
+
+    def test_direct_run_subset_generates_binds_and_resumes(self) -> None:
+        h = self.h
+        self.assertEqual(self.cli_run("--subset", str(self.subset_path)), 0)
+        run_id = self.output.getvalue().split()[-1]
+        run = load_run(run_id)
+        self.assertEqual(run.metadata["subset_sha256"], self.subset_sha)
+        self.assertEqual((run.directory / "subset.json").read_bytes(), self.subset_bytes)
+        self.assertEqual([row["item_id"] for row in run.items], self.subset["ids"])
+        # An interrupted subset run resumes only its missing subset pair.
+        lines = (run.directory / "items.jsonl").read_bytes().splitlines(keepends=True)
+        (run.directory / "items.jsonl").write_bytes(b"".join(lines[:-1]))
+        data.write_json(run.directory / "run.json", {**run.metadata, "status": "interrupted"})
+        self.assertEqual(runner.resume(run_id), run_id)
+        self.assertEqual([item for item, _ in h.generation_calls],
+                         self.subset["ids"] + self.subset["ids"][-1:])
+        self.assertEqual(load_run(run_id).metadata["status"], "completed")
+        # The stored copy is bound by hash: a changed copy exits 2, a missing one 3.
+        data.write_json(run.directory / "run.json", {**load_run(run_id).metadata, "status": "interrupted"})
+        (run.directory / "subset.json").write_bytes(self.subset_bytes + b" ")
+        self.assert_exit(2, runner.resume, run_id)
+        (run.directory / "subset.json").unlink()
+        self.assert_exit(3, runner.resume, run_id)
+
+    def test_direct_run_refuses_mismatched_and_malformed_subsets(self) -> None:
+        h = self.h
+        legacy = self.inputs / "v07-protocol.yaml"
+        legacy.write_bytes((ROOT / "configs/protocols/protocol.yaml").read_bytes())
+        cases = [
+            (2, [], self.variant("other-manifest.json", manifest_sha256="e" * 64), "validation"),
+            (2, [], self.subset_path, "smoke"),
+            (2, [], self.variant("outside.json", ids=[h.ids[0], *self.subset["ids"][1:]]), "validation"),
+            (2, [], self.variant("order.json", ids=self.subset["ids"][::-1]), "validation"),
+            (3, [], self.variant("extra.json", extra=True), "validation"),
+            (3, [], self.variant("size.json", size=2), "validation"),
+            (3, [], self.variant("empty.json", ids=[], size=0), "validation"),
+            (3, [], self.inputs / "missing.json", "validation"),
+            (3, ["--protocol", str(legacy)], self.subset_path, "validation"),
+        ]
+        (self.inputs / "not-json.json").write_bytes(b"{")
+        cases.append((3, [], self.inputs / "not-json.json", "validation"))
+        for code, extra, path, tier in cases:
+            with self.subTest(path=path.name, tier=tier, extra=extra):
+                protocol = Path(extra[1]) if extra else None
+                self.assertEqual(self.cli_run("--subset", str(path), protocol=protocol, tier=tier), code)
+        self.assertEqual(self.run_directories(), [])
+        self.assertEqual(h.generation_calls, [])
+        with patch.object(sys, "stderr", io.StringIO()):
+            self.assertEqual(cli.main(["run", "--resume", "x", "--subset", str(self.subset_path)]), 3)
+
+
+class CredentialChildTests(RunnerHarnessCase):
+    """Only the downloading converter steps inherit HF credentials (synthetic sentinels)."""
+
+    def test_command_and_server_children_drop_credentials(self) -> None:
+        h = self.h
+        sentinels = {name: f"synthetic-sentinel-{name.lower()}"
+                     for name in runner.runtime.HF_CREDENTIAL_VARIABLES}
+        with patch.dict(os.environ, sentinels):
+            self.start(h.steps("convert", "sanity", "verify", "smoke", "report:4"))
+        self.assertEqual(h.status()["state"], "completed")
+        names = [arguments[1] if arguments[0] == "model" else arguments[0] for arguments in h.commands]
+        self.assertEqual(names, ["convert", "sanity", "verify-runtime", "verify-artifact", "report"])
+        environments = dict(zip(names, h.command_envs))
+        # The converter's own Hugging Face requests keep the parent environment.
+        self.assertIsNone(environments.pop("convert"))
+        self.assertIsNone(environments.pop("sanity"))
+        for name, environment in environments.items():
+            with self.subTest(command=name):
+                self.assertFalse(set(sentinels) & set(environment))
+                self.assertEqual(environment["SLM_EVAL_RUNS"], str(self.root / "runs"))
+        self.assertTrue(h.servers)
+        for server in h.servers:
+            self.assertFalse(set(sentinels) & set(server.environment))
+            self.assertIn("LLAMA_API_KEY", server.environment)
+        leaked = [path for path in (self.root / "runs").rglob("*") if path.is_file()
+                  and any(value.encode() in path.read_bytes() for value in sentinels.values())]
+        self.assertEqual(leaked, [])
+
+
+class RunStoreWriteFailureTests(RunnerHarnessCase):
+    def test_short_item_write_is_an_interruption_and_resume_recovers(self) -> None:
+        """A run-store write failure (here ENOSPC) leaves only a torn line to discard."""
+        import errno
+        h = self.h
+        real_fsync, failed = os.fsync, []
+
+        def fsync(descriptor: int) -> None:
+            items = list((self.root / "runs").glob("*/items.jsonl"))
+            if (not failed and items and os.fstat(descriptor).st_ino == items[0].stat().st_ino
+                    and items[0].read_bytes().count(b"\n") == 2):
+                failed.append(items[0])
+                os.truncate(items[0], items[0].stat().st_size - 5)  # A short write.
+                raise OSError(errno.ENOSPC, "No space left on device")
+            real_fsync(descriptor)
+
+        with patch.object(runner.os, "fsync", side_effect=fsync):
+            self.start(h.steps("smoke"))
+        status = h.status()
+        self.assertEqual((status["state"], status["last_event"]["detail"]["error"]),
+                         ("interrupted", "OSError"))
+        self.assertFalse(failed[0].read_bytes().endswith(b"\n"))
+        self.assertFalse(h.servers[-1].alive)
+        self.assertFalse(h.sleep_lock.held)
+        self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+        self.assert_items()
+        self.assertEqual([item for item, _ in h.generation_calls],
+                         [h.ids[0], h.ids[1], h.ids[1], h.ids[2]])
+        reasons = [e["detail"].get("reason") for e in h.run().metadata["events"]
+                   if e["type"] == "interrupted"]
+        self.assertEqual(reasons, ["previous_attempt_ended", "partial_item_write_discarded"])
 
 
 class BoundaryTests(unittest.TestCase):

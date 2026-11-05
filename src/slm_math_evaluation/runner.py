@@ -211,7 +211,7 @@ def _resource_host_check(protocol: dict[str, Any], host: dict[str, Any]) -> None
 
 def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
                   manifest_sha: str, tier: str, k: int, seed_base: int,
-                  host: dict[str, Any]) -> dict[str, Any]:
+                  host: dict[str, Any], subset_sha: str | None = None) -> dict[str, Any]:
     document = {"run_id": run_id, "protocol_version": protocol["protocol_version"],
             "protocol_sha256": protocol_sha, "manifest_sha256": manifest_sha,
             "tier": tier, "k": k, "seeds": [seed_base + sample for sample in range(k)],
@@ -224,7 +224,7 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
     if protocol.get("model", {}).get("adapter") is not None:
         adapter = model_adapters.from_protocol(protocol)
         document.update(adapter={"id": adapter.id, "version": model_adapters.ADAPTER_VERSION},
-                        role=protocol.get("role", "target"), subset_sha256=None,
+                        role=protocol.get("role", "target"), subset_sha256=subset_sha,
                         chat_template_sha256=protocol["model"]["chat_template"]["sha256"],
                         events=[])
         document["model_source_revision"] = (None if document["role"] == "fixture" else
@@ -233,11 +233,13 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
 
 
 def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base: int,
-          control: Any = None) -> str:
+          control: Any = None, subset_path: Path | None = None) -> str:
     if k < 1 or seed_base < 0:
         raise DataError("k must be positive and seed-base nonnegative", 3)
     if not protocol_path.is_file() or not manifest_path.is_file():
         raise DataError("protocol or manifest missing", 3)
+    if subset_path is not None and not subset_path.is_file():
+        raise DataError("subset missing", 3)
     protocol_bytes, manifest_bytes = protocol_path.read_bytes(), manifest_path.read_bytes()
     try:
         protocol = yaml.safe_load(protocol_bytes)
@@ -248,6 +250,17 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     protocol_sha = sha256_bytes(protocol_bytes)
     manifest = read_json(manifest_path)
     ids = _identity(protocol, manifest, tier)
+    subset_bytes = None
+    if subset_path is not None:
+        # §4 compatibility: a v0.7 protocol (no adapter) keeps v0.7 behavior, no subset.
+        if protocol.get("model", {}).get("adapter") is None:
+            raise DataError("subset runs need a protocol with a model adapter (§4)", 3)
+        subset_bytes = subset_path.read_bytes()
+        try:
+            subset = json.loads(subset_bytes)
+        except ValueError as error:
+            raise DataError(f"invalid subset JSON: {error}", 3) from error
+        ids = data.subset_ids(subset, sha256_bytes(manifest_bytes), tier, ids)
     _protocol_check(protocol)
     verification = _verification_copies(protocol_sha, protocol)
     _source_rows(manifest, ids)
@@ -258,10 +271,13 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "protocol.yaml").write_bytes(protocol_bytes)
     (directory / "manifest.json").write_bytes(manifest_bytes)
+    if subset_bytes is not None:
+        (directory / "subset.json").write_bytes(subset_bytes)
     for name, content in verification.items():
         (directory / name).write_bytes(content)
     metadata = _run_metadata(run_id, protocol, protocol_sha, sha256_bytes(manifest_bytes),
-                             tier, k, seed_base, host)
+                             tier, k, seed_base, host,
+                             sha256_bytes(subset_bytes) if subset_bytes is not None else None)
     write_json(directory / "run.json", metadata)
     (directory / "items.jsonl").touch()
     # Expose the ID before generation so an interrupted run can be resumed.
@@ -285,6 +301,9 @@ def resume(run_id: str, control: Any = None) -> str:
             or run.metadata["protocol_version"] != run.protocol["protocol_version"]):
         raise DataError("run model/runtime/protocol identity mismatch", 2)
     ids = _identity(run.protocol, run.manifest, run.metadata["tier"])
+    if run.subset is not None:  # The run-start copy, already checked against run.json.
+        ids = data.subset_ids(run.subset, run.metadata["manifest_sha256"],
+                              run.metadata["tier"], ids)
     existing = {(row["item_id"], row["sample_index"]) for row in run.items}
     required = {(item_id, sample) for item_id in ids for sample in range(run.metadata["k"])}
     if not existing <= required:
@@ -317,7 +336,8 @@ def _prompt(protocol: dict[str, Any], problem: str) -> tuple[str, list[dict[str,
 
 def _check_runtime_version(server: Path) -> None:
     version = subprocess.run([str(server), "--version"], capture_output=True,
-                             text=True, timeout=15, check=False)
+                             text=True, timeout=15, check=False,
+                             env=runtime.llama_environment())
     if version.returncode or runtime.COMMIT[:9] not in version.stdout + version.stderr:
         raise DataError("runtime build identity mismatch", 2)
 
@@ -427,9 +447,7 @@ class _Server:
             reservation.bind(("127.0.0.1", 0))
             self.port = reservation.getsockname()[1]
         self.key = secrets.token_urlsafe(32)
-        self.environment = {name: value for name, value in os.environ.items()
-                            if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
-        self.environment["LLAMA_API_KEY"] = self.key
+        self.environment = runtime.llama_environment(self.key)
         self.arguments = runtime.server_arguments(self.server, self.model, self.port, self.protocol)
 
     def launch(self) -> None:

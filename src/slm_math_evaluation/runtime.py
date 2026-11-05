@@ -166,6 +166,31 @@ class RuntimeErrorWithCode(Exception):
         self.code = code
 
 
+# Download credentials stay with the converter's own Hugging Face requests (§12.5).
+# No llama.cpp child or other tool child needs them, so none inherits them.
+HF_CREDENTIAL_VARIABLES = ("HF_TOKEN", "HF_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN",
+                           "HUGGINGFACE_TOKEN")
+
+
+def credential_free_environment() -> dict[str, str]:
+    """The current environment without any Hugging Face credential binding."""
+    return {name: value for name, value in os.environ.items()
+            if name not in HF_CREDENTIAL_VARIABLES}
+
+
+def llama_environment(key: str | None = None) -> dict[str, str]:
+    """Environment for a pinned llama.cpp child: no credentials, no ``LLAMA_ARG_*``.
+
+    llama.cpp reads ``LLAMA_ARG_*`` settings from the environment, so only the
+    explicit arguments configure it. A server child receives its run key here.
+    """
+    environment = {name: value for name, value in credential_free_environment().items()
+                   if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
+    if key is not None:
+        environment["LLAMA_API_KEY"] = key
+    return environment
+
+
 def install_cleanup_signals() -> dict[signal.Signals, Any]:
     """Turn process termination into an exception so server finally runs."""
     if current_thread() is not main_thread():
@@ -567,7 +592,7 @@ def verify_runtime(protocol_path: Path) -> Path:
         raise RuntimeErrorWithCode("model artifact SHA-256 mismatch", 2)
     template_sha = verify_chat_template(protocol, model)
     version = subprocess.run([str(server), "--version"], capture_output=True,
-                             text=True, timeout=15, check=False)
+                             text=True, timeout=15, check=False, env=llama_environment())
     if version.returncode or COMMIT[:9] not in version.stdout + version.stderr:
         raise RuntimeErrorWithCode("runtime build mismatch", 2)
     with socket.socket() as reservation:
@@ -575,9 +600,7 @@ def verify_runtime(protocol_path: Path) -> Path:
         port = reservation.getsockname()[1]
     arguments = server_arguments(server, model, port, protocol)
     key = secrets.token_urlsafe(32)
-    environment = {name: value for name, value in os.environ.items()
-                   if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
-    environment["LLAMA_API_KEY"] = key
+    environment = llama_environment(key)
     record: dict[str, Any] = {
         "verification_version": "1",
         "contract_version": ("v0.8.1" if protocol.get("model", {}).get("adapter") else "v0.6"),
@@ -708,16 +731,14 @@ def verify_artifact(protocol_path: Path) -> Path:
         raise RuntimeErrorWithCode("model artifact SHA-256 mismatch", 2)
     template_sha = verify_chat_template(protocol, model)
     version = subprocess.run([str(server), "--version"], capture_output=True,
-                             text=True, timeout=15, check=False)
+                             text=True, timeout=15, check=False, env=llama_environment())
     if version.returncode or COMMIT[:9] not in version.stdout + version.stderr:
         raise RuntimeErrorWithCode("runtime build mismatch", 2)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     key = secrets.token_urlsafe(32)
-    environment = {name: value for name, value in os.environ.items()
-                   if not name.startswith("LLAMA_ARG_") and name != "LLAMA_API_KEY"}
-    environment["LLAMA_API_KEY"] = key
+    environment = llama_environment(key)
     arguments = server_arguments(server, model, port, protocol)
     output = runs_root() / "_verification" / protocol_sha / "artifact-verification.json"
     record: dict[str, Any] = {
