@@ -37,6 +37,11 @@ its exit code. The `slm-eval run` command path is unchanged.
 
   Each step re-checks its own inputs when it starts. A mismatch at that point
   stops the plan.
+- **Runtime files.** The authorization's runtime build is checked for every
+  plan. `runner start` and `runner resume` verify the installed runtime files
+  only when a `verify` or `run` step is still to execute. Each of those steps
+  verifies them again when it starts. A plan that has only approval steps left
+  needs no runtime files, and no server ever starts for an approval step.
 - **Harness revision.** This is the checked-out commit. A tree with
   uncommitted changes never matches a binding. Resume re-checks the revision.
 - **Attempts.** `attempts_allowed` counts `runner start` calls for one plan.
@@ -90,8 +95,17 @@ its exit code. The `slm-eval run` command path is unchanged.
   server and `--version` probe, from `run`, `verify-runtime`, `verify-artifact`
   and the runner, as well as the converter's dependency check, conversion,
   quantization and perplexity tools. The runner's `verify` and `report` command
-  children also get none. Its `convert` and `sanity` children keep the
-  environment, because they download from the pinned sources.
+  children also get none, and neither do the local helpers `caffeinate`,
+  `osascript`, `vm_stat`, `git` and `ps`, or the public-content validator's
+  `git`. The runner's background worker and its `convert` and `sanity` children
+  keep the environment, because they download from the pinned sources.
+- **Download redirects.** The converter attaches its bearer only to requests
+  for the origin `https://huggingface.co` (port `443`). A redirect to any other
+  scheme, host or port drops the `Authorization` header, and no later redirect
+  gets it back. A redirect from HTTPS to another scheme is refused (exit `1`).
+  `Range` still follows each redirect, so a CDN download resumes, and the
+  publisher hash is still checked at the end. Errors name no URL, so no signed
+  redirect address is printed.
 - **Report counts.** For v0.8 runs, `report` adds the §7 counts:
   - missing final answers (extraction status `no_answer` or `truncated`);
   - infrastructure failures (pairs that exhausted their retries);
@@ -100,7 +114,19 @@ its exit code. The `slm-eval run` command path is unchanged.
   Exhausted pairs are never written to `items.jsonl`. They are neither wrong
   answers nor part of an accuracy denominator, and `completeness` counts them
   as missing. A subset run reports the subset's size as its expected item count.
-  Reports of v0.7 runs are unchanged.
+
+  With `--compare-published V`, a v0.8 report also sets the comparison's
+  `not_whole_count` flag. The flag is set when `V` times the scored item ×
+  sample pairs is not a whole number. `V` is still shown and still read, with
+  the same comparison reading. Reports of v0.7 runs are unchanged.
+- **Direct-run interruptions.** A v0.8 `slm-eval run` that ends on a signal,
+  or on an unexpected error that leaves it `interrupted`, records an
+  `interrupted` event. Its reason is `signal` or `error`, and it names the
+  attempt. A `resume` after an attempt that ended without a checkpoint (a
+  crash, `kill -9` or power loss) records `previous_attempt_ended`, as runner
+  steps do. Exits for integrity, precondition or HTTP errors are not
+  interruptions. The item in progress is never recorded, and v0.7 runs gain no
+  events.
 
 ## Fixture verification
 
@@ -161,10 +187,15 @@ fault injection with a fake keyed server and an injected clock. It covers:
 - sleep gaps on the injected clock.
 
 [`tests/test_credential_propagation.py`](../tests/test_credential_propagation.py)
-starts real child processes through each model-server, `--version` and
-converter-tool path, with synthetic sentinels.
+uses synthetic sentinels and real child processes. Those children run through
+each model-server, `--version`, converter-tool and local-helper path. The same
+file drives a fake transport through urllib's real redirect handling, covering
+same-origin, cross-origin, changed-port, downgrade, redirect-chain and resumed
+CDN downloads.
 [`tests/test_report_counts.py`](../tests/test_report_counts.py) covers the §7
-counts and the unchanged v0.7 report.
+counts, the `not_whole_count` flag and the unchanged v0.7 report.
+`tests/test_plan_runner.py` also covers approval-only plans in an empty cache
+and direct-run interruption events.
 
 ## Limits
 
@@ -172,9 +203,10 @@ counts and the unchanged v0.7 report.
   An interrupted generation is never recorded (§6.1), so its own thinking state
   is unknown. Which records the distribution should cover awaits a contract
   clarification.
-- A direct `slm-eval run` records no `interrupted` event when it is
-  interrupted, so its interruption count is `0`. Only runner steps record these
-  events.
+- Direct-run interruption events and download redirect scoping are verified by
+  deterministic tests only: injected signals, and a fake transport behind
+  urllib's own redirect handling. No real signal was sent to a model run, and
+  no network request was made.
 - Subset mechanics are verified on synthetic tiers only. No fixture or target
   model has run on the validation subset.
 - Sleep, lid close and power loss on real hardware were not exercised. As

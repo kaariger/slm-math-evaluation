@@ -320,8 +320,19 @@ def resume(run_id: str, control: Any = None) -> str:
         raise DataError("no missing item/sample pairs to resume", 3)
     _source_rows(run.manifest, ids)
     _resource_host_check(run.protocol, _host())
+    attempts = run.metadata["attempts"]
+    if (control is None and run.metadata.get("events") is not None
+            and attempts and attempts[-1].get("ended") is None):
+        # The previous direct attempt ended without a checkpoint: a crash, kill or
+        # power loss. The runner records the same event for its steps.
+        run.metadata["events"].append(_interrupted_event(
+            {"reason": "previous_attempt_ended", "attempt": attempts[-1]["n"]}, 0.0))
     _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing, control)
     return run_id
+
+
+def _interrupted_event(detail: dict[str, Any], awake_s: float) -> dict[str, Any]:
+    return {"type": "interrupted", "at_utc": _utc(), "awake_s": round(awake_s, 3), "detail": detail}
 
 
 def _prompt(protocol: dict[str, Any], problem: str) -> tuple[str, list[dict[str, str]]]:
@@ -511,6 +522,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
     attempt = {"n": len(metadata["attempts"]) + 1, "started": _utc(), "ended": None,
                "status": "interrupted", "resumed_from": metadata["attempts"][-1]["n"] if metadata["attempts"] else None}
     metadata["attempts"].append(attempt)
+    awake_start = time.monotonic()  # Does not advance during system sleep (macOS, Linux).
     if control is not None:
         control.bind(directory, metadata, attempt)
     write_json(directory / "run.json", metadata)
@@ -672,9 +684,16 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         metadata["status"] = "stopped" if stopped else "interrupted"
         attempt["status"] = "aborted" if stopped else "interrupted"
         raise
-    except BaseException:
+    except BaseException as error:
         metadata["status"] = "interrupted"
         attempt["status"] = "interrupted"
+        if control is None and new_protocol:
+            # §6.1: the item in progress is never written; the interruption is an
+            # event. A runner step records its own (plan_runner.PlanControl).
+            detail = ({"reason": "signal"} if isinstance(error, KeyboardInterrupt) else
+                      {"reason": "error", "error": type(error).__name__})
+            metadata["events"].append(_interrupted_event(
+                {**detail, "attempt": attempt["n"]}, time.monotonic() - awake_start))
         raise
     finally:
         session.stop()

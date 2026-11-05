@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional, Pattern, Sequence
 
 
+HF_CREDENTIAL_VARIABLES = ("HF_TOKEN", "HF_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN",
+                           "HUGGINGFACE_TOKEN")
+
+
 @dataclass(frozen=True)
 class Finding:
     path: Path
@@ -48,11 +52,15 @@ def rules() -> Sequence[Rule]:
 def candidate_paths(root: Path) -> Iterator[Path]:
     """Yield tracked and unignored untracked files, or a filesystem fallback."""
 
+    # The local git child needs no Hugging Face credential, so none is inherited.
+    environment = {key: value for key, value in os.environ.items()
+                   if key not in HF_CREDENTIAL_VARIABLES}
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
+        env=environment,
     )
     if result.returncode == 0:
         for raw_path in sorted(item for item in result.stdout.split(b"\0") if item):

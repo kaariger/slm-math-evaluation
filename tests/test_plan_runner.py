@@ -30,6 +30,7 @@ from slm_math_evaluation.run_store import load_run
 
 ROOT = Path(__file__).parents[1]
 REAL_POPEN = subprocess.Popen
+REAL_CHECK_RUNTIME = plan_runner.check_runtime
 PROTOCOL = "configs/protocols/fixture-runner.yaml"
 SPEC = "configs/models/fixture-runner-spec.yaml"
 HARNESS = "a" * 40
@@ -340,6 +341,8 @@ class Harness:
             return ok
         if behavior == "crash_worker":
             raise SimulatedCrash()
+        if behavior == "keyboard_interrupt":  # SIGINT, or SIGTERM/SIGHUP via the cleanup handler.
+            raise KeyboardInterrupt
         raise AssertionError(behavior)
 
     # Inspection
@@ -1080,6 +1083,110 @@ class SubsetRunnerTests(RunnerHarnessCase):
         self.assertEqual(h.generation_calls, [])
         with patch.object(sys, "stderr", io.StringIO()):
             self.assertEqual(cli.main(["run", "--resume", "x", "--subset", str(self.subset_path)]), 3)
+
+
+class RuntimeRequirementTests(RunnerHarnessCase):
+    """S-008: runtime files are required only where a step starts a server (empty cache here)."""
+
+    def test_approval_only_plans_run_without_runtime_files(self) -> None:
+        h = self.h
+        self.assertFalse((self.root / "cache").exists())
+        with patch.object(plan_runner, "check_runtime", REAL_CHECK_RUNTIME):
+            steps = h.steps("approval") + [{"type": "approval", "id": "second-review"}]
+            self.start(steps)
+            self.assertEqual((h.status()["state"], h.status()["step"]), ("waiting_approval", 1))
+            self.resume()
+            self.assertEqual((h.status()["state"], h.status()["step"]), ("waiting_approval", 2))
+            self.resume()
+            self.assertEqual(h.status()["state"], "completed")
+            # A plan that would start a server still needs the files, at start.
+            plan, authorization = h.plan(h.steps("verify", "smoke"))
+            self.assert_exit(3, plan_runner.start, plan, authorization, h.deps(), _sync_launch)
+        self.assertEqual((h.servers, h.commands, h.generation_calls), ([], [], []))
+
+    def test_resume_checks_runtime_files_only_for_pending_server_steps(self) -> None:
+        h = self.h
+        self.start(h.steps("approval", "verify", "smoke"))       # Runtime present at start.
+        self.assertEqual(h.status()["state"], "waiting_approval")
+        with patch.object(plan_runner, "check_runtime", REAL_CHECK_RUNTIME):
+            self.assert_exit(3, self.resume)                       # Server steps still pending.
+        self.assertEqual(h.status()["state"], "waiting_approval")
+        self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+
+    def test_completed_server_steps_need_no_runtime_files_to_pass_an_approval(self) -> None:
+        h = self.h
+        self.start(h.steps("verify", "smoke", "approval"))
+        self.assertEqual(h.status()["state"], "waiting_approval")
+        with patch.object(plan_runner, "check_runtime", REAL_CHECK_RUNTIME):
+            self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+
+
+class DirectInterruptionTests(RunnerHarnessCase):
+    """F2: a direct v0.8 `slm-eval run` records its interruptions in run.json events."""
+
+    def direct_run(self) -> str:
+        return runner.start(self.h.repo / PROTOCOL, self.h.repo / plan_runner.MANIFEST,
+                            "smoke", 1, 0)
+
+    def interrupted(self, run_id: str) -> list[dict]:
+        return [e["detail"] for e in load_run(run_id).metadata["events"] if e["type"] == "interrupted"]
+
+    def test_a_signal_is_an_event_and_resume_regenerates_only_the_lost_item(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "keyboard_interrupt"
+        with self.assertRaises(KeyboardInterrupt):
+            self.direct_run()
+        run_id = self.output.getvalue().split()[-1]
+        run = load_run(run_id)
+        self.assertEqual((run.metadata["status"], run.metadata["attempts"][-1]["status"]),
+                         ("interrupted", "interrupted"))
+        self.assertEqual(self.interrupted(run_id), [{"reason": "signal", "attempt": 1}])
+        self.assertEqual([row["item_id"] for row in run.items], h.ids[:1])  # Nothing partial.
+        self.assertFalse(h.servers[-1].alive)
+        self.assertEqual(runner.resume(run_id), run_id)
+        resumed = load_run(run_id)
+        self.assertEqual(resumed.metadata["status"], "completed")
+        self.assertEqual(sorted(row["item_id"] for row in resumed.items), h.ids)
+        self.assertEqual([item for item, _ in h.generation_calls], [h.ids[0], h.ids[1], h.ids[1], h.ids[2]])
+        self.assertEqual(self.interrupted(run_id), [{"reason": "signal", "attempt": 1}])  # Not twice.
+        self.assertTrue(all(row["infra_retries"] == 0 for row in resumed.items))
+
+    def test_an_attempt_without_a_checkpoint_is_recorded_on_resume(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "keyboard_interrupt"
+        with self.assertRaises(KeyboardInterrupt):
+            self.direct_run()
+        run_id = self.output.getvalue().split()[-1]
+        run = load_run(run_id)
+        # As after kill -9 or power loss: no handler ran, so nothing was recorded.
+        metadata = dict(run.metadata, events=[])
+        metadata["attempts"][-1]["ended"] = None
+        data.write_json(run.directory / "run.json", metadata)
+        runner.resume(run_id)
+        self.assertEqual(self.interrupted(run_id), [{"reason": "previous_attempt_ended", "attempt": 1}])
+        self.assertEqual(load_run(run_id).metadata["status"], "completed")
+
+    def test_errors_are_not_interruptions_and_legacy_runs_gain_no_events(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[0], 0)] = "error500"
+        self.assert_exit(1, self.direct_run)
+        run_id = self.output.getvalue().split()[-1]
+        self.assertEqual(load_run(run_id).metadata["status"], "interrupted")
+        self.assertEqual(self.interrupted(run_id), [])
+        legacy = json.loads((ROOT / "configs/protocols/protocol.yaml").read_text())
+        h.write("configs/protocols/legacy.yaml", json.dumps(legacy).encode())
+        h.behaviors[(h.ids[0], 1)] = "keyboard_interrupt"
+        # The fake server reports the fixture alias; the legacy settings check is not under test.
+        with patch.object(runner.runtime, "sha256_file", lambda _path: legacy["model"]["artifact"]["sha256"]), \
+                patch.object(runner, "_effective_settings", return_value={}), \
+                self.assertRaises(KeyboardInterrupt):
+            runner.start(h.repo / "configs/protocols/legacy.yaml", h.repo / plan_runner.MANIFEST,
+                         "smoke", 1, 0)
+        legacy_run = load_run(self.output.getvalue().split()[-1])
+        self.assertEqual(legacy_run.metadata["status"], "interrupted")
+        self.assertNotIn("events", legacy_run.metadata)
 
 
 class CredentialChildTests(RunnerHarnessCase):

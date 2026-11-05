@@ -67,6 +67,11 @@ RECENT_EVENTS = 10
 
 # Clock, sleep lock, notification and memory probe -------------------------------------
 
+def _helper_environment() -> dict[str, str]:
+    """Local helper children (caffeinate, osascript, vm_stat, git, ps) need no credential."""
+    return runtime.credential_free_environment()
+
+
 class Clock:
     """Awake time stops while the system sleeps; continuous time does not (§13.5)."""
 
@@ -104,7 +109,7 @@ class SleepLock:
         try:
             self.process = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())],
                                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                            stderr=subprocess.DEVNULL)
+                                            stderr=subprocess.DEVNULL, env=_helper_environment())
         except OSError:
             self.process = None
             return False
@@ -131,7 +136,8 @@ def notify(message: str) -> None:
         subprocess.run(["osascript", "-e", "on run argv",
                         "-e", 'display notification (item 1 of argv) with title "slm-eval runner"',
                         "-e", "end run", message],
-                       stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False)
+                       stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False,
+                       env=_helper_environment())
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -141,7 +147,7 @@ def free_memory_gb() -> float | None:
     try:
         if sys.platform == "darwin":
             output = subprocess.run(["vm_stat"], capture_output=True, text=True,
-                                    timeout=10, check=False).stdout
+                                    timeout=10, check=False, env=_helper_environment()).stdout
             page = re.search(r"page size of (\d+) bytes", output)
             counts = re.findall(r"^Pages (?:free|inactive|speculative):\s+(\d+)\.", output, re.M)
             if page is None or len(counts) != 3:
@@ -255,9 +261,11 @@ def harness_revision() -> str:
     """The checked-out commit; uncommitted changes make it differ from any binding."""
     try:
         head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"], capture_output=True,
-                              text=True, timeout=30, check=True).stdout.strip()
+                              text=True, timeout=30, check=True,
+                              env=_helper_environment()).stdout.strip()
         dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain"],
-                               capture_output=True, text=True, timeout=30, check=True).stdout
+                               capture_output=True, text=True, timeout=30, check=True,
+                               env=_helper_environment()).stdout
     except (OSError, subprocess.SubprocessError) as error:
         raise DataError("installed harness revision is unavailable", 3) from error
     return head + ("+uncommitted" if dirty.strip() else "")
@@ -381,6 +389,19 @@ def check_runtime() -> None:
         runtime.verify_runtime_files(data.cache_root() / "models" / f"llama-{runtime.BUILD}")
     except runtime.RuntimeErrorWithCode as error:
         raise DataError(str(error), error.code) from error
+
+
+RUNTIME_STEPS = ("verify", "run")
+
+
+def check_runtime_if_needed(steps: list[dict[str, Any]]) -> None:
+    """Verify the installed runtime only for plans whose remaining steps start a server.
+
+    The authorization's runtime build is checked for every plan (check_bindings),
+    and each verify or run step re-verifies the runtime files when it starts.
+    """
+    if any(step["type"] in RUNTIME_STEPS for step in steps):
+        check_runtime()
 
 
 # State directory ------------------------------------------------------------------------
@@ -577,7 +598,7 @@ def _current(command: str) -> State:
 def _process_command(pid: int) -> str | None:
     try:
         result = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True,
-                                text=True, timeout=10, check=False)
+                                text=True, timeout=10, check=False, env=_helper_environment())
     except (OSError, subprocess.SubprocessError):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
@@ -1162,7 +1183,7 @@ def _validated(state: State, status: dict[str, Any]) -> tuple[list[dict[str, Any
     check_bindings(steps, authorization, status["plan_sha256"])
     protocols = check_inputs(steps, authorization["bindings"])
     check_artifacts(steps, protocols, status["completed_steps"])
-    check_runtime()
+    check_runtime_if_needed(steps[status["completed_steps"]:])
     return steps, authorization
 
 
@@ -1179,7 +1200,7 @@ def start(plan_path: Path, authorization_path: Path, deps: Deps | None = None,
     check_bindings(steps, authorization, plan_sha)
     protocols = check_inputs(steps, authorization["bindings"])
     check_smoke_first(steps, protocols)
-    check_runtime()
+    check_runtime_if_needed(steps)
     state = State(runner_root() / plan_sha)
     if any(other.status()["state"] not in TERMINAL
            for other in _plans() if other.directory != state.directory):

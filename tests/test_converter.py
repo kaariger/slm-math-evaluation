@@ -95,7 +95,7 @@ class ConverterTests(unittest.TestCase):
     def test_download_hash_mismatch_keeps_only_partial(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch.object(converter.urllib.request, "urlopen", return_value=Response(b"wrong")):
+            with patch.object(converter, "_open", return_value=Response(b"wrong")):
                 with self.assertRaises(data.DataError) as caught:
                     converter._download("https://example.test/file", root / "file", _sha(b"right"),
                                         root / "scratch", root / "models")
@@ -113,7 +113,7 @@ class ConverterTests(unittest.TestCase):
                 seen.append(request.get_header("Range"))
                 self.assertFalse(final.exists())
                 return Response(b"def", 206, "bytes 3-5/6")
-            with patch.object(converter.urllib.request, "urlopen", side_effect=response):
+            with patch.object(converter, "_open", side_effect=response):
                 converter._download("https://example.test/file", final, _sha(b"abcdef"),
                                     root / "scratch", root / "models")
             self.assertEqual(seen, ["bytes=3-"])
@@ -211,7 +211,7 @@ class ConverterTests(unittest.TestCase):
                  patch.object(converter, "_tools", return_value=(Path("python"),
                                                                Path("quantize"), Path("ppl"))), \
                  patch.object(converter, "_perplexity", side_effect=[2.0, 1.0]), \
-                 patch.object(converter.urllib.request, "urlopen",
+                 patch.object(converter, "_open",
                               return_value=Response(reference_bytes)):
                 with self.assertRaises(data.DataError) as caught:
                     converter.sanity(spec_path)

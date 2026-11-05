@@ -142,6 +142,48 @@ def _large_file_check(scratch: Path) -> None:
         raise data.DataError("scratch cannot hold files larger than 4 GB", 3)
 
 
+# The only origin a download credential is sent to (§12.5).
+HF_ORIGIN = ("https", "huggingface.co", 443)
+
+
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    """Scheme, host and effective port; an unreadable port matches no origin."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        return scheme, parts.hostname, -1
+    return scheme, parts.hostname, port or {"https": 443, "http": 80}.get(scheme)
+
+
+class _CredentialScopedRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow redirects without carrying a credential off its HTTPS origin.
+
+    urllib copies every request header, ``Authorization`` included, to each
+    redirect, whatever its host. This handler refuses a redirect from HTTPS to
+    another scheme. It removes ``Authorization`` as soon as a redirect leaves the
+    credential's origin, and it never adds the credential back, so no later
+    redirect carries it either. ``Range`` still follows, so resumed downloads work.
+    """
+
+    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str,
+                         headers: Any, newurl: str) -> urllib.request.Request | None:
+        if (urllib.parse.urlsplit(req.full_url).scheme.lower() == "https"
+                and urllib.parse.urlsplit(newurl).scheme.lower() != "https"):
+            fp.close()
+            raise urllib.error.HTTPError(req.full_url, code, "redirect leaves HTTPS; refused",
+                                         headers, None)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and _origin(redirected.full_url) != HF_ORIGIN:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+def _open(request: urllib.request.Request, timeout: float) -> Any:
+    return urllib.request.build_opener(_CredentialScopedRedirects()).open(request, timeout=timeout)
+
+
 def _download(url: str, path: Path, expected: str, scratch: Path, models: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
@@ -156,11 +198,11 @@ def _download(url: str, path: Path, expected: str, scratch: Path, models: Path) 
     offset = partial.stat().st_size if partial.exists() else 0
     headers = {"Range": f"bytes={offset}-"} if offset else {}
     token = os.environ.get("HF_TOKEN")
-    if token and url.startswith("https://huggingface.co/"):
+    if token and _origin(url) == HF_ORIGIN:
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with _open(request, timeout=120) as response:
             status = response.status
             if offset and status == 206:
                 content_range = response.headers.get("Content-Range", "")
@@ -175,6 +217,8 @@ def _download(url: str, path: Path, expected: str, scratch: Path, models: Path) 
                 stream.flush()
                 os.fsync(stream.fileno())
     except (urllib.error.URLError, TimeoutError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()  # The message names no URL, so no signed redirect is printed.
         raise data.DataError("pinned download failed; partial file retained", 1) from error
     if data.sha256_file(partial) != expected:
         raise data.DataError("downloaded publisher file SHA-256 mismatch", 2)

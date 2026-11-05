@@ -216,6 +216,13 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
         document["subset_sha256"] = run.metadata.get("subset_sha256")
     if published is not None:
         document["comparison"] = _comparison_reading(published, primary, secondary, sensitivity)
+        if new_protocol:
+            # §7: V can be an accuracy over this run only if V × pairs is whole. The
+            # pairs are the scored item × sample pairs the compared accuracy is over.
+            # V is still shown, and still read, as a reference.
+            pairs = published * count
+            document["comparison"]["not_whole_count"] = not math.isclose(
+                pairs, round(pairs), rel_tol=0, abs_tol=1e-9)
         low, high = primary["interval_95"]
         document["distance_from_published"] = primary["accuracy"] - published
         document["distance_interval_95"] = [low - published, high - published]
@@ -246,6 +253,9 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
                       f"Factors: {', '.join(comparison['factors']) or 'none'}",
                       f"Distance from published fraction: {document['distance_from_published']:.6f}",
                       f"Distance interval (95%): {document['distance_interval_95']}"))
+        if comparison.get("not_whole_count"):
+            lines.append(f"Published fraction {comparison['published']} × {count} scored pairs is "
+                         "not a whole number (not_whole_count): shown as a reference only.")
     lines.extend(("", document["interpretation"]))
     lines.extend(("", "## Protocol provenance", "",
                   "| Field | Provenance |", "| --- | --- |"))

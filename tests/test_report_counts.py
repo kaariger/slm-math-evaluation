@@ -150,6 +150,30 @@ class ReportCountTests(unittest.TestCase):
         self.assertEqual(self.report("subset"), 3)
         self.assertFalse((directory / "report.json").exists())
 
+    def test_published_value_that_is_not_a_whole_count_is_flagged_and_still_read(self) -> None:
+        for name, items, value, flagged in (("odd", 3, "0.5", True), ("even", 4, "0.5", False),
+                                            ("float-ten", 10, "0.7", False), ("third", 9, "0.25", True)):
+            with self.subTest(name=name):
+                rows = [_row(self.ids[n % len(self.ids)] + f"-{n}", "ok", False, n % 2 == 0)
+                        for n in range(items)]
+                self.manifest["tiers"]["smoke"] = [row["item_id"] for row in rows]
+                self.manifest["items"] = [{"id": row["item_id"], "role": "dev"} for row in rows]
+                directory = self.write_run(f"published-{name}", self.current, rows)
+                with redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()):
+                    code = cli.main(["report", "--run", f"published-{name}", "--compare-published", value])
+                self.assertEqual(code, 0)
+                comparison = json.loads((directory / "report.json").read_text())["comparison"]
+                self.assertIs(comparison["not_whole_count"], flagged)
+                self.assertEqual(comparison["published"], float(value))
+                self.assertIn(comparison["reading"], {"CONSISTENT", "PROTOCOL-SENSITIVE", "UNEXPLAINED"})
+                self.assertEqual("not_whole_count" in (directory / "report.md").read_text(), flagged)
+        # A v0.7 run keeps its unchanged comparison, with no flag.
+        rows = [_row(self.ids[n], "ok", False, True) for n in range(3)]
+        directory = self.write_run("published-legacy", self.legacy, rows)
+        with redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()):
+            self.assertEqual(cli.main(["report", "--run", "published-legacy", "--compare-published", "0.5"]), 0)
+        self.assertNotIn("not_whole_count", (directory / "report.json").read_text())
+
     def test_v07_report_and_fixture_refusal_are_unchanged(self) -> None:
         rows = [_row(self.ids[0], "ok", False, True), _row(self.ids[1], "no_answer", False, False)]
         directory = self.write_run("legacy", self.legacy, rows)

@@ -7,6 +7,8 @@ child records variable names and booleans only, never values.
 
 from __future__ import annotations
 
+import email.message
+import importlib.util
 import io
 import json
 import os
@@ -17,6 +19,8 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import urllib.request
+import urllib.response
 
 from slm_math_evaluation import converter, runner, runtime
 
@@ -50,6 +54,14 @@ def _child(directory: Path) -> Path:
 
 def _reports(tool: Path, kind: str) -> list[dict]:
     return json.loads(tool.with_name(f"report-{kind}.json").read_text())
+
+
+def _load_validator():
+    spec = importlib.util.spec_from_file_location(
+        "validate_public_repo", Path(__file__).parents[1] / "scripts/validate_public_repo.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _no_sentinel_in(directory: Path) -> list[str]:
@@ -146,6 +158,38 @@ class CredentialPropagationTests(unittest.TestCase):
             self.assert_clean(entry, key=False)
         self.assertEqual(_no_sentinel_in(self.root), [])
 
+    def test_local_helper_children_drop_credentials(self) -> None:
+        """F4: caffeinate, osascript, vm_stat, git and ps run with no credential.
+
+        Each real helper command is replaced by the stand-in, which records names
+        and booleans only. The production code still chooses the environment.
+        """
+        from slm_math_evaluation import plan_runner
+        validator = _load_validator()
+
+        def controlled(real):
+            def call(arguments, *args, **kwargs):
+                return real([str(self.tool)], *args, **kwargs)
+            return call
+
+        with patch.object(plan_runner.sys, "platform", "darwin"), \
+                patch.object(plan_runner.subprocess, "Popen", controlled(subprocess.Popen)), \
+                patch.object(plan_runner.subprocess, "run", controlled(subprocess.run)), \
+                patch.object(validator.subprocess, "run", controlled(subprocess.run)):
+            lock = plan_runner.SleepLock()
+            self.assertTrue(lock.acquire())                     # caffeinate
+            lock.process.wait(timeout=30)
+            lock.release()
+            plan_runner.notify("synthetic notification")        # osascript
+            plan_runner.free_memory_gb()                        # vm_stat
+            plan_runner.harness_revision()                      # git rev-parse, git status
+            plan_runner._process_command(os.getpid())          # ps
+            list(validator.candidate_paths(self.root))          # git ls-files
+        entries = _reports(self.tool, "child")
+        self.assertEqual(len(entries), 7)
+        for entry in entries:
+            self.assert_clean(entry, key=False)
+
     def test_downloader_keeps_its_own_hugging_face_authentication(self) -> None:
         requests = []
 
@@ -154,7 +198,7 @@ class CredentialPropagationTests(unittest.TestCase):
             return _Response(b"content")
 
         digest = converter.data.sha256_bytes(b"content")
-        with patch.object(converter.urllib.request, "urlopen", side_effect=urlopen), \
+        with patch.object(converter, "_open", side_effect=urlopen), \
                 patch.object(converter, "_space_check"):
             for index, url in enumerate(("https://huggingface.co/owner/name/resolve/c/file",
                                          "https://codeload.github.com/owner/name/tar.gz/c")):
@@ -168,6 +212,138 @@ class CredentialPropagationTests(unittest.TestCase):
 class _Response(io.BytesIO):
     status = 200
     headers: dict = {}
+
+
+BEARER = "Bearer " + SENTINELS["HF_TOKEN"]
+SIGNED = "?X-Amz-Signature=synthetic-signed-query"
+
+
+class _Transport:
+    """Canned responses by URL, through urllib's real redirect handling; no network."""
+
+    def __init__(self, routes: dict[str, tuple[int, dict[str, str], bytes]]) -> None:
+        self.routes, self.seen = routes, []
+
+    def respond(self, request: urllib.request.Request):
+        self.seen.append({"url": request.full_url,
+                          "bearer": request.get_header("Authorization") == BEARER,
+                          "authorization": request.get_header("Authorization") is not None,
+                          "range": request.get_header("Range")})
+        code, extra, body = self.routes[request.full_url]
+        headers = email.message.Message()
+        for name, value in extra.items():
+            headers[name] = value
+        response = urllib.response.addinfourl(io.BytesIO(body), headers, request.full_url, code)
+        response.msg = "fixture"
+        return response
+
+
+def _fake_handlers(transport: _Transport) -> tuple:
+    class FakeHTTPS(urllib.request.HTTPSHandler):
+        def https_open(self, request):
+            return transport.respond(request)
+
+    class FakeHTTP(urllib.request.HTTPHandler):
+        def http_open(self, request):
+            return transport.respond(request)
+
+    return FakeHTTPS(), FakeHTTP()
+
+
+class RedirectScopeTests(unittest.TestCase):
+    """F1: a download credential never leaves its HTTPS origin across redirects."""
+
+    HF = "https://huggingface.co/owner/name/resolve/" + "c" * 40 + "/model.safetensors"
+    CDN = "https://cdn-lfs.hf.co/repos/x/y" + SIGNED
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        environment = patch.dict(os.environ, {"HF_TOKEN": SENTINELS["HF_TOKEN"]})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def download(self, routes: dict, url: str | None = None, body: bytes = b"weights",
+                 name: str = "model.safetensors"):
+        transport = _Transport(routes)
+        real = urllib.request.build_opener
+        with patch.object(converter.urllib.request, "build_opener",
+                          side_effect=lambda *handlers: real(*_fake_handlers(transport), *handlers)), \
+                patch.object(converter, "_space_check"):
+            try:
+                converter._download(url or self.HF, self.root / name, converter.data.sha256_bytes(body),
+                                    self.root / "scratch", self.root / "models")
+                error = None
+            except converter.data.DataError as caught:
+                error = caught
+        return transport.seen, error
+
+    @staticmethod
+    def found(location: str) -> tuple[int, dict[str, str], bytes]:
+        return 302, {"Location": location}, b""
+
+    def test_same_origin_redirect_keeps_the_bearer(self) -> None:
+        for index, same in enumerate(("https://huggingface.co/api/resolve-cache/x",
+                                      "https://huggingface.co:443/api/resolve-cache/x",
+                                      "https://HuggingFace.co/api/resolve-cache/x")):
+            with self.subTest(location=same):
+                seen, error = self.download({self.HF: self.found(same), same: (200, {}, b"weights")},
+                                            name=f"same-{index}")
+                self.assertIsNone(error)
+                self.assertEqual([hop["bearer"] for hop in seen], [True, True])
+
+    def test_changed_origin_or_port_strips_the_bearer(self) -> None:
+        for index, other in enumerate((self.CDN, "https://huggingface.co:8443/x",
+                                       "https://huggingface.co.example.test/x", "https://example.test/x")):
+            with self.subTest(location=other):
+                seen, error = self.download({self.HF: self.found(other), other: (200, {}, b"weights")},
+                                            name=f"other-{index}")
+                self.assertIsNone(error)
+                self.assertEqual([(hop["bearer"], hop["authorization"]) for hop in seen],
+                                 [(True, True), (False, False)])
+
+    def test_https_to_http_redirect_is_refused_before_any_request(self) -> None:
+        for downgrade in ("http://huggingface.co/x", "http://cdn-lfs.hf.co/x"):
+            with self.subTest(location=downgrade):
+                seen, error = self.download({self.HF: self.found(downgrade),
+                                             downgrade: (200, {}, b"weights")}, name="downgrade")
+                self.assertEqual(error.code, 1)
+                self.assertEqual([hop["url"] for hop in seen], [self.HF])
+                self.assertFalse((self.root / "downgrade").exists())
+
+    def test_a_stripped_bearer_is_never_reattached_along_the_chain(self) -> None:
+        back = "https://huggingface.co/api/again"
+        seen, error = self.download({self.HF: self.found(self.CDN), self.CDN: self.found(back),
+                                     back: (200, {}, b"weights")})
+        self.assertIsNone(error)
+        self.assertEqual([hop["authorization"] for hop in seen], [True, False, False])
+        # A download that starts off the origin never gains the bearer, even on it.
+        other = "https://codeload.github.com/owner/name/tar.gz/" + "c" * 40
+        seen, error = self.download({other: self.found(self.HF), self.HF: (200, {}, b"archive")},
+                                    url=other, body=b"archive", name="archive.tar.gz")
+        self.assertIsNone(error)
+        self.assertEqual([hop["authorization"] for hop in seen], [False, False])
+
+    def test_resumed_range_follows_a_cdn_redirect_and_the_hash_is_still_checked(self) -> None:
+        (self.root / "model.safetensors.partial").write_bytes(b"wei")
+        seen, error = self.download({self.HF: self.found(self.CDN),
+                                     self.CDN: (206, {"Content-Range": "bytes 3-6/7"}, b"ghts")})
+        self.assertIsNone(error)
+        self.assertEqual([(hop["range"], hop["bearer"]) for hop in seen],
+                         [("bytes=3-", True), ("bytes=3-", False)])
+        self.assertEqual((self.root / "model.safetensors").read_bytes(), b"weights")
+        (self.root / "model.safetensors").unlink()
+        seen, error = self.download({self.HF: self.found(self.CDN), self.CDN: (200, {}, b"tampered")})
+        self.assertEqual(error.code, 2)
+        self.assertFalse((self.root / "model.safetensors").exists())
+
+    def test_failures_after_a_redirect_name_no_signed_url_or_credential(self) -> None:
+        seen, error = self.download({self.HF: self.found(self.CDN), self.CDN: (500, {}, b"")})
+        self.assertEqual(error.code, 1)
+        message = str(error)
+        for secret in (SIGNED, "X-Amz-Signature", SENTINELS["HF_TOKEN"], "cdn-lfs"):
+            self.assertNotIn(secret, message)
 
 
 if __name__ == "__main__":
