@@ -34,8 +34,9 @@ source:
 | Source weights | six safetensors files, 29,319,042,992 bytes in total | publisher tree listing at the revision |
 
 The card says this model "has higher accuracy but generates on average 50% more
-tokens, thus having higher latency". The output cap matters more here than for
-Phi-4-reasoning.
+tokens, thus having higher latency". The shared 14,000-token output cap still
+applies. More of its generations may reach the cap, and the report counts those
+as truncations (§7).
 
 **Artifact.** Convert the publisher's BF16 weights locally to Q4_K_M with the
 same pinned converter as [0002](0002-phi-4-reasoning-target.md):
@@ -57,11 +58,26 @@ system prompt itself, and the protocol keeps `system_prompt: null`. The
 rendered one-user prompt ends with `<|im_start|>assistant<|im_sep|>`, and
 thinking is split on `<think>` and `</think>`.
 
-**Settings.** Use the shared Phi proposals: temperature 0.8, top-k 50 and
-top-p 0.95, as the card and `generation_config.json` specify, and a
-32,768-token context. The card also reports experiments that "extended its
-maximum number of tokens to 64k". This exceeds the model's
-`max_position_embeddings` and isn't proposed.
+**Settings.** Use the study's
+[selected settings](../target-protocol-proposals.md#selected-study-settings-all-three-targets),
+as for 0002:
+
+- temperature 0.6 and top-p 0.95, with top-k and min-p disabled;
+- a 14,000-token output cap;
+- the shared zero-shot `\boxed{}` prompt;
+- seed base 0 and one sample per item.
+
+The card recommends temperature 0.8, top-k 50 and top-p 0.95, which
+`generation_config.json` repeats. The selected temperature and top-k are
+intentional deviations from that recommendation. The card also reports
+experiments that "extended its maximum number of tokens to 64k". This exceeds
+the model's `max_position_embeddings` and isn't proposed. The runtime context
+must hold the rendered prompt plus 14,000 tokens within the 32,768-token limit,
+and its exact value awaits measurement.
+
+**Sanity route.** Smoke only, with no reference ratio, as for 0002. The spec's
+`sanity.reference` is `null`. Any absolute perplexity the generic command
+records is not a vendor-ratio check.
 
 ## Evidence so far, and its limits
 
@@ -73,20 +89,20 @@ measurement, sanity check, smoke run, proof or MATH-500 result exists for this
 target.
 
 **Published figure.** The pinned model card reports AIME 24/25, OmniMath,
-GPQA-Diamond and LiveCodeBench for this model, but no MATH-500 figure.
+GPQA-Diamond and LiveCodeBench for this model, but no MATH-500 figure. The
+citation, mapping and sample-count provenance of a published comparison are
+open, as for 0002. No other benchmark stands in for it.
 
-## Maintainer choices still needed
+## Open inputs
 
-1. Approve or amend this target.
-2. The output cap. Given the longer generations, decide whether this target's
-   cap matches Phi-4-reasoning's, or is set from smoke-tier truncation evidence
-   within the 32,768-token context.
-3. The user prompt (shared with 0002).
-4. The `resources` values, after a memory measurement.
-5. `sanity.reference` (a reference GGUF, which needs an approved download, or
-   `null`).
-6. The published comparison figure and its source, if any.
-7. Samples per item, the seed base and the tier sequence.
+1. Maintainer approval of this record's text.
+2. The runtime context and `resources` values, after prompt-length and memory
+   measurement.
+3. The artifact and conversion-record hashes, produced by the pinned
+   conversion.
+4. The published comparison: its citation, its mapping and the provenance of
+   its sample count.
+5. The exact proof and tier plan. Smoke precedes any other tier (§12.4).
 
 ## Alternatives considered
 

@@ -59,9 +59,10 @@ harness, not a subject of study. A fixture:
   evidence record of what it verified. It doesn't need a target decision.
 - **Stays on harmless inputs.** It runs on the smoke tier, or on synthetic
   inputs, unless a maintainer decision allows more. This stops fixture runs on
-  the validation or test tier from informing protocol choices. This is a
-  proposed policy; the harness doesn't enforce it, and existing fixture runs
-  used the smoke tier only.
+  the validation or test tier from informing protocol choices. This default,
+  and any scoped exception to it, is a proposed maintainer policy. The harness
+  doesn't enforce it, and no CLI enforcement is added or claimed. No existing
+  test case is retired by it. Existing fixture runs used the smoke tier only.
 
 **A fixture result never stands in for a target result.** A fixture
 verification shows only that the harness path works on that fixture. Each
@@ -70,8 +71,8 @@ feasibility measurement, smoke run and proof.
 
 ## Reconciling the contributor guidance
 
-The guidance's "Adding models … requires a new public decision" is read here as
-adding evaluation targets. For maintainer review, the proposed wording, without
+This draft proposes reading the guidance's "Adding models … requires a new
+public decision" as adding evaluation targets. For maintainer review, the proposed wording, without
 editing the guidance itself, is:
 
 > Adding an evaluation target model, dataset or runtime requires a new public
@@ -91,7 +92,7 @@ maintainer's choice.
 - **Synthetic fakes only.** Fake servers already cover much of the runner. But
   conversion, template embedding and runtime loading need real, if tiny, model
   files.
-- **Treating a fixture as a "small target".** Rejected. It would blur the line
+- **Treating a fixture as a "small target".** Not proposed. It would blur the line
   between results and harness evidence.
 
 ## Consequences
@@ -100,5 +101,6 @@ maintainer's choice.
   migration.
 - Public documents describe fixture runs as "fixture verification, not a target
   result".
-- Approving this record finalizes the interpretation. The contributor
-  guidance's wording is then updated separately.
+- The interpretation becomes final only if the maintainer approves this
+  record. Changing the contributor guidance's wording is then a separate,
+  explicitly scoped task.

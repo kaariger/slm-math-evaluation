@@ -57,18 +57,41 @@ Otherwise the protocol keeps `system_prompt: null`.
 | Mode | Rendered one-user prompt | Notes |
 |---|---|---|
 | `thinking_on` | opens a system turn beginning `<|think|>`; ends `<|turn>model\n` | |
-| `thinking_off` | ends `<|turn>model\n<|channel>thought\n<channel|>` | Generation starts after an empty, closed thought block. The card says the model still emits empty thought tags when thinking is off. Whether the converted model repeats them is for the smoke run to show; either form splits under §8. |
+| `thinking_off` | ends `<|turn>model\n<|channel>thought\n<channel|>` | Generation starts after an empty, closed thought block. The card says the model still emits empty thought tags when thinking is off. Whether the converted model repeats them is for the thinking-off capability check to show; either form splits under §8. |
 
 Template-inserted text is part of `prompt_sha256` (§6.1). The template also has
 a tool-response branch that can end with an open thought delimiter. The
 evaluation prompt uses no tools.
 
-**Settings.** Use the proposed values in the
-[protocol proposals](../target-protocol-proposals.md#gemma-4-12b-it).
-Sampling follows the card's "standardized sampling configuration across all use
-cases", which the pinned `generation_config.json` repeats: temperature 1.0,
-top-p 0.95 and top-k 64. The reasoning mode, context length and output cap are
-unresolved.
+**Settings.** Use the study's
+[selected settings](../target-protocol-proposals.md#selected-study-settings-all-three-targets):
+
+- temperature 0.6 and top-p 0.95, with top-k and min-p disabled;
+- a 14,000-token output cap;
+- the shared zero-shot `\boxed{}` prompt;
+- seed base 0 and one sample per item;
+- `reasoning_mode: thinking_on` as the selected primary mode.
+
+The card gives a "standardized sampling configuration across all use cases",
+which the pinned `generation_config.json` repeats: temperature 1.0, top-p 0.95
+and top-k 64. The selected temperature and top-k are intentional deviations
+from that recommendation. `thinking_off` is a capability and proof check only,
+showing that the template argument and the split work; it isn't an authorized
+full sensitivity evaluation. The runtime context must hold the rendered prompt
+plus 14,000 tokens, within the text model's 262,144-token limit. Its exact
+value awaits measurement.
+
+**Sanity route.** A fixed-text perplexity comparison against a pinned artifact
+from `ggml-org/gemma-4-12B-it-GGUF`, plus a smoke run. The reference is
+required, so `sanity.reference` is not `null`. Several inputs to the later
+proof are still open:
+
+- the reference's exact revision, file and SHA-256;
+- the fixed text and its hash;
+- the ratio limit;
+- approval to download the reference.
+
+Nothing is downloaded now. The smoke run belongs to the later runner plan.
 
 ## Evidence so far, and its limits
 
@@ -94,32 +117,35 @@ Not done. This record claims none of these checks:
 - a sanity check, a smoke run or a proof run;
 - any MATH-500 result.
 
-**Published figure.** For the 12B model, the pinned card reports AIME 2026
-without tools (77.5%) and MATH-Vision (79.7%), among other benchmarks. It
-reports no MATH-500 figure.
+**Published figure and framing.** For the 12B model, the pinned card reports
+AIME 2026 without tools (77.5%) and MATH-Vision (79.7%), among other
+benchmarks. It reports no MATH-500 figure. Gemma is reported standalone. The
+study's Qwen3-8B thinking-mode results from the same harness are retained as
+context, not as a published comparison. No other benchmark stands in for a
+MATH-500 figure.
 
-## Maintainer choices still needed
+## Open inputs
 
-1. Approve or amend this target.
-2. The reasoning mode. `thinking_on` is proposed, with `thinking_off` as a
-   single-factor sensitivity variant.
-3. The context length and output cap. The card states no reasoning budget, and
-   the 256K context is far longer than needed.
-4. The user prompt (shared with the Phi targets).
-5. The `resources` values, after a memory measurement.
-6. `sanity.reference` (a reference GGUF, which needs an approved download, or
-   `null`).
-7. The published comparison figure and its source, if any.
-8. Samples per item, the seed base and the tier sequence.
+1. Maintainer approval of this record's text.
+2. The runtime context and `resources` values, after prompt-length and memory
+   measurement.
+3. The artifact and conversion-record hashes, produced by the pinned
+   conversion.
+4. The sanity reference pin from `ggml-org/gemma-4-12B-it-GGUF` (revision,
+   file and SHA-256), its fixed text, its ratio limit and approval to download
+   it.
+5. The exact proof and tier plan, including the smoke run and the
+   thinking-off capability check. Smoke precedes any other tier (§12.4).
 
 ## Alternatives considered
 
 - **Other Gemma 4 sizes** (E2B, E4B, 26B A4B, 31B). They aren't the contracted
   target. The two larger ones need more memory than the 12B model.
-- **`thinking_off` as the primary mode.** It is cheaper and shorter. Measuring
-  it as a variant keeps the thinking effect visible, as for Qwen3-8B.
-- **A third-party GGUF.** This adds unpinned packaging, without a conversion
-  record.
+- **`thinking_off` as the primary mode.** Not selected. It stays a capability
+  and proof check, not a full evaluation.
+- **A third-party GGUF as the evaluated artifact.** This adds unpinned
+  packaging without a conversion record. The `ggml-org` GGUF serves only as
+  the pinned sanity reference.
 
 ## Consequences
 

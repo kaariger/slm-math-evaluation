@@ -64,12 +64,26 @@ the one-user evaluation prompt, the rendered prompt ends with
 `<|im_start|>assistant<|im_sep|>`, with no open `<think>`. Thinking is split on
 `<think>` and `</think>`.
 
-**Settings.** Use the proposed values in the
-[protocol proposals](../target-protocol-proposals.md#phi-4-reasoning-and-phi-4-reasoning-plus).
-Sampling follows the card's instruction that inference "must use
-`temperature=0.8`, `top_k=50`, `top_p=0.95`, and `do_sample=True`", which the
-pinned `generation_config.json` repeats. The context is 32,768 tokens; the
-output cap is unresolved.
+**Settings.** Use the study's
+[selected settings](../target-protocol-proposals.md#selected-study-settings-all-three-targets):
+
+- temperature 0.6 and top-p 0.95, with top-k and min-p disabled;
+- a 14,000-token output cap;
+- the shared zero-shot prompt that asks for the final answer in `\boxed{}`;
+- seed base 0 and one sample per item.
+
+The card says inference "must use `temperature=0.8`, `top_k=50`, `top_p=0.95`,
+and `do_sample=True`", and the pinned `generation_config.json` repeats these
+values. The selected temperature and top-k are intentional deviations from
+that recommendation. The runtime context must hold the rendered prompt plus
+14,000 tokens within the model's 32,768-token limit. Its exact value awaits
+measurement.
+
+**Sanity route.** Smoke only, with no reference ratio. No vendor GGUF
+reference is used, so the spec's `sanity.reference` is `null`. The generic
+`model sanity` command may still record the converted file's absolute
+perplexity on the fixed text. That is not a vendor-ratio check. The smoke run
+belongs to the later runner plan.
 
 ## Evidence so far, and its limits
 
@@ -98,22 +112,25 @@ Not done. This record claims none of these checks:
 - any MATH-500 result.
 
 **Published figure.** The pinned model card reports AIME 24/25, OmniMath,
-GPQA-Diamond and LiveCodeBench, but no MATH-500 figure. The v1 HTML of the
-cited technical report ([arXiv 2504.21318](https://arxiv.org/abs/2504.21318v1))
-doesn't mention MATH-500.
+GPQA-Diamond and LiveCodeBench, but no MATH-500 figure. A text search of the v1
+HTML of the cited technical report
+([arXiv 2504.21318](https://arxiv.org/abs/2504.21318v1)) for "MATH-500" found
+no match. Three things are still open for a published comparison: its
+citation, its mapping to this item set, and the provenance of its sample count.
+No other benchmark stands in for it. When a sourced figure is present, the
+result is described as "evaluation under the study's stated settings, compared
+with the published figure; not a reproduction".
 
-## Maintainer choices still needed
+## Open inputs
 
-1. Approve or amend this target.
-2. The output cap. It must fit with the prompt in the 32,768-token context; the
-   card suggests 32,768 new tokens "for more complex queries".
-3. The user prompt: the shared `\boxed{}` instruction, or the problem alone.
-4. The `resources` values, after a memory measurement.
-5. Whether `sanity.reference` pins a reference GGUF for the perplexity ratio,
-   which would need its own approved download, or is `null`.
-6. The published comparison figure and its source, if any.
-7. Samples per item, the seed base and the tier sequence for the run plan. Smoke
-   precedes any other tier (§12.4).
+1. Maintainer approval of this record's text.
+2. The runtime context and `resources` values, after prompt-length and memory
+   measurement.
+3. The artifact and conversion-record hashes, produced by the pinned
+   conversion.
+4. The published comparison: its citation, its mapping and the provenance of
+   its sample count.
+5. The exact proof and tier plan. Smoke precedes any other tier (§12.4).
 
 ## Alternatives considered
 
@@ -121,8 +138,7 @@ doesn't mention MATH-500.
   publisher source, without a conversion record.
 - **Q8_0 or BF16.** These need more memory. The BF16 weights alone are 29.3 GB,
   against the evaluation machine's 32 GB of unified memory
-  ([decision 0001](0001-local-qwen-runtime.md)). Q8_0 could be a later
-  sensitivity variant.
+  ([decision 0001](0001-local-qwen-runtime.md)). Neither is proposed.
 - **The base Phi-4.** It isn't a reasoning model, and it isn't one of the
   contracted targets.
 
