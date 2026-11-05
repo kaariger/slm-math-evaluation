@@ -1,7 +1,9 @@
-# 0005: Ephemeral test fixtures versus evaluation targets — DRAFT
+# 0005: Ephemeral test fixtures versus evaluation targets
 
-- Status: **DRAFT, pending explicit maintainer approval.** Until approved, this
-  text is a proposed interpretation, not a final one.
+- Status: **Accepted by the maintainer on 2026-11-05.** The fixture
+  interpretation and smoke/synthetic default are approved; broader scope
+  requires a separate explicit exception. No CLI enforcement or guidance edit
+  is added by this record.
 - Date: 2026-11-04
 - Related: [0002](0002-phi-4-reasoning-target.md),
   [0003](0003-phi-4-reasoning-plus-target.md),
@@ -27,7 +29,7 @@ converter and the runner
 its own. That needs an explicit reading, so a fixture can't be mistaken for a
 target and the guidance stays consistent.
 
-## Proposed decision
+## Decision
 
 **An evaluation target** is a model named by an accepted public decision
 record. Only a target, run under an approved protocol, can produce a result
@@ -59,10 +61,10 @@ harness, not a subject of study. A fixture:
   evidence record of what it verified. It doesn't need a target decision.
 - **Stays on harmless inputs.** It runs on the smoke tier, or on synthetic
   inputs, unless a maintainer decision allows more. This stops fixture runs on
-  the validation or test tier from informing protocol choices. This default,
-  and any scoped exception to it, is a proposed maintainer policy. The harness
-  doesn't enforce it, and no CLI enforcement is added or claimed. No existing
-  test case is retired by it. Existing fixture runs used the smoke tier only.
+  the validation or test tier from informing protocol choices. This default is
+  maintainer-approved; any broader scope requires a separately approved
+  exception. The harness doesn't enforce it, and no CLI enforcement is added
+  or claimed. No existing test case is retired by it. Existing fixture runs used the smoke tier only.
 
 **A fixture result never stands in for a target result.** A fixture
 verification shows only that the harness path works on that fixture. Each
@@ -71,8 +73,8 @@ feasibility measurement, smoke run and proof.
 
 ## Reconciling the contributor guidance
 
-This draft proposes reading the guidance's "Adding models … requires a new
-public decision" as adding evaluation targets. For maintainer review, the proposed wording, without
+This decision reads the guidance's "Adding models … requires a new public
+decision" as adding evaluation targets. For maintainer review, the proposed wording, without
 editing the guidance itself, is:
 
 > Adding an evaluation target model, dataset or runtime requires a new public
@@ -101,6 +103,5 @@ maintainer's choice.
   migration.
 - Public documents describe fixture runs as "fixture verification, not a target
   result".
-- The interpretation becomes final only if the maintainer approves this
-  record. Changing the contributor guidance's wording is then a separate,
-  explicitly scoped task.
+- The maintainer approved this interpretation on 2026-11-05. Changing the
+  contributor guidance's wording remains a separate, explicitly scoped task.

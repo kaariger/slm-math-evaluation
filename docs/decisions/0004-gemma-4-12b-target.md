@@ -1,7 +1,8 @@
-# 0004: Evaluate Gemma 4 12B IT as a MATH-500 target — DRAFT
+# 0004: Evaluate Gemma 4 12B IT as a MATH-500 target
 
-- Status: **DRAFT, pending maintainer approval.** This proposes a target; it is
-  not an accepted decision.
+- Status: **Accepted by the maintainer on 2026-11-05** for target selection
+  and the documented study settings. The open runtime, artifact and proof
+  inputs below are not finalized, and no execution is authorized by this record.
 - Date: 2026-11-04
 - Proposed protocol values: [target protocol proposals](../target-protocol-proposals.md#gemma-4-12b-it)
 - Related: [0005 fixtures versus targets](0005-ephemeral-fixtures-versus-targets.md)
@@ -14,7 +15,7 @@ records". The maintainer has already approved its source revision for model
 tooling ([adapter source evidence](../model-adapter-source-evidence.md)). That
 approval doesn't cover protocol values or evaluation.
 
-## Proposed decision
+## Decision
 
 Evaluate Google DeepMind's Gemma 4 12B instruction-tuned model on MATH-500,
 using its text model only, from one pinned source:
@@ -126,15 +127,14 @@ MATH-500 figure.
 
 ## Open inputs
 
-1. Maintainer approval of this record's text.
-2. The runtime context and `resources` values, after prompt-length and memory
+1. The runtime context and `resources` values, after prompt-length and memory
    measurement.
-3. The artifact and conversion-record hashes, produced by the pinned
+2. The artifact and conversion-record hashes, produced by the pinned
    conversion.
-4. The sanity reference pin from `ggml-org/gemma-4-12B-it-GGUF` (revision,
+3. The sanity reference pin from `ggml-org/gemma-4-12B-it-GGUF` (revision,
    file and SHA-256), its fixed text, its ratio limit and approval to download
    it.
-5. The exact proof and tier plan, including the smoke run and the
+4. The exact proof and tier plan, including the smoke run and the
    thinking-off capability check. Smoke precedes any other tier (§12.4).
 
 ## Alternatives considered

@@ -1,7 +1,9 @@
-# Target protocol value proposals — DRAFT
+# Target protocol value proposals
 
-- Status: **DRAFT, pending maintainer approval of the text.** Nothing here is a
-  frozen protocol file or a runnable configuration.
+- Status: **Text approved by the maintainer on 2026-11-05** as the record of
+  selected study settings and open/provisional inputs. Rows marked proposed or
+  open remain provisional; no runnable/frozen configuration or unresolved
+  runtime value is authorized by this text approval.
 - Date: 2026-11-04
 - Contract: [interface contract v0.8.1](math500-interface-contract-v0.8.1.md) §4
 - Targets: [0002 Phi-4-reasoning](decisions/0002-phi-4-reasoning-target.md),
@@ -168,7 +170,6 @@ These await measurement, pinning or approval:
   approval to download it;
 - the Phi published-figure citation, its mapping and sample-count provenance;
 - the exact proof and tier plan, including the smoke runs;
-- approval of this document's text and of the target records.
 
 ## Publisher metadata used
 

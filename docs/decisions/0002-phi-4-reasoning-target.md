@@ -1,7 +1,8 @@
-# 0002: Evaluate Phi-4-reasoning as a MATH-500 target — DRAFT
+# 0002: Evaluate Phi-4-reasoning as a MATH-500 target
 
-- Status: **DRAFT, pending maintainer approval.** This proposes a target; it is
-  not an accepted decision.
+- Status: **Accepted by the maintainer on 2026-11-05** for target selection
+  and the documented study settings. The open runtime, artifact and proof
+  inputs below are not finalized, and no execution is authorized by this record.
 - Date: 2026-11-04
 - Proposed protocol values: [target protocol proposals](../target-protocol-proposals.md#phi-4-reasoning-and-phi-4-reasoning-plus)
 - Related: [0003 Phi-4-reasoning-plus](0003-phi-4-reasoning-plus-target.md),
@@ -19,7 +20,7 @@ The maintainer has already approved this model's source revision for model
 tooling ([adapter source evidence](../model-adapter-source-evidence.md)). That
 approval doesn't cover protocol values or evaluation.
 
-## Proposed decision
+## Decision
 
 Evaluate Microsoft Research's Phi-4-reasoning on MATH-500 from one pinned
 source:
@@ -123,14 +124,13 @@ with the published figure; not a reproduction".
 
 ## Open inputs
 
-1. Maintainer approval of this record's text.
-2. The runtime context and `resources` values, after prompt-length and memory
+1. The runtime context and `resources` values, after prompt-length and memory
    measurement.
-3. The artifact and conversion-record hashes, produced by the pinned
+2. The artifact and conversion-record hashes, produced by the pinned
    conversion.
-4. The published comparison: its citation, its mapping and the provenance of
+3. The published comparison: its citation, its mapping and the provenance of
    its sample count.
-5. The exact proof and tier plan. Smoke precedes any other tier (§12.4).
+4. The exact proof and tier plan. Smoke precedes any other tier (§12.4).
 
 ## Alternatives considered
 
