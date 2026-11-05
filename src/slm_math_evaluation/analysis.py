@@ -19,6 +19,7 @@ from .run_store import StoredRun, load_run, write_text
 
 BOOTSTRAP_SEED = 4242
 BOOTSTRAP_RESAMPLES = 2000
+THINKING_STATES = ("absent", "empty", "present", "unterminated")  # §8
 
 
 def _method_identities(run: StoredRun) -> tuple[dict[str, str], list[dict[str, str]]]:
@@ -191,11 +192,24 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
         exhausted = {(event["detail"].get("item_id"), event["detail"].get("sample_index"))
                      for event in events if event["type"] == "infra_retry"
                      and event["detail"].get("exhausted") is True}
+        # The interrupted attempts' own states. `unknown` (a bound pair whose attempt
+        # returned nothing to classify) and `no_item` (an event naming no pair) are
+        # observability bins, not thinking states; all six bins sum to the count.
+        interrupted = [event for event in events if event["type"] == "interrupted"]
+        states = dict.fromkeys((*THINKING_STATES, "unknown", "no_item"), 0)
+        for event in interrupted:
+            detail = event.get("detail") or {}
+            if detail.get("item_id") is None or detail.get("sample_index") is None:
+                states["no_item"] += 1
+            elif detail.get("thinking_state") in THINKING_STATES:
+                states[detail["thinking_state"]] += 1
+            else:
+                states["unknown"] += 1
         counts.update(
             missing_final_answers=sum(row["extraction"]["status"] in ("no_answer", "truncated")
                                       for row in rows),
             infrastructure_failures=len(exhausted),
-            interruptions=sum(event["type"] == "interrupted" for event in events))
+            interruptions=len(interrupted), interruption_thinking_states=states)
     document: dict[str, Any] = {
         "report_version": "1", "run_id": run_id, "tier": run.metadata["tier"],
         "k": run.metadata["k"], "protocol_version": run.metadata["protocol_version"],
@@ -213,14 +227,20 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
                            "Evaluation under the study's stated settings; not a reproduction."),
     }
     if new_protocol:
+        # Accuracy and intervals are over scored pairs; exhausted pairs are neither
+        # correct nor wrong. Planned pairs are the declared run's (or subset's).
+        document["completeness"].update(planned_pairs=expected_count, scored_pairs=count,
+                                        exhausted_pairs=len(exhausted))
         document["subset_sha256"] = run.metadata.get("subset_sha256")
+    elif run.metadata.get("subset_sha256") is not None:
+        document["subset_sha256"] = run.metadata["subset_sha256"]  # A legacy subset run.
     if published is not None:
         document["comparison"] = _comparison_reading(published, primary, secondary, sensitivity)
         if new_protocol:
-            # §7: V can be an accuracy over this run only if V × pairs is whole. The
-            # pairs are the scored item × sample pairs the compared accuracy is over.
-            # V is still shown, and still read, as a reference.
-            pairs = published * count
+            # §7: V can be an accuracy over this item set only if V × planned pairs is
+            # whole, even when infrastructure failures leave fewer pairs scored. V is
+            # still shown, and still read, as a reference.
+            pairs = published * expected_count
             document["comparison"]["not_whole_count"] = not math.isclose(
                 pairs, round(pairs), rel_tol=0, abs_tol=1e-9)
         low, high = primary["interval_95"]
@@ -242,11 +262,18 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
              f"fallback extractions: {counts['fallback_extractions']}; thinking rate: {counts['thinking_rate']:.6f}; "
              f"grader disagreements: {counts['grader_disagreements']}"]
     if new_protocol:
+        states = counts["interruption_thinking_states"]
         lines.extend(("", f"Missing final answers: {counts['missing_final_answers']}; "
                       f"infrastructure failures (not scored): {counts['infrastructure_failures']}; "
-                      f"interruptions: {counts['interruptions']}"))
-        if document["subset_sha256"] is not None:
-            lines.extend(("", f"Subset SHA-256: {document['subset_sha256']}"))
+                      f"interruptions: {counts['interruptions']}",
+                      "", "Interrupted attempts by state: "
+                      + "; ".join(f"{name.replace('_', ' ')}: {value}" for name, value in states.items())))
+        if not document["completeness"]["complete"]:
+            lines.extend(("", f"INCOMPLETE: {count} of {expected_count} planned pairs scored "
+                          f"({len(exhausted)} exhausted infrastructure pairs). Accuracy is "
+                          "conditional on the scored pairs; this is not a completed evaluation."))
+    if document.get("subset_sha256") is not None:
+        lines.extend(("", f"Subset SHA-256: {document['subset_sha256']}"))
     if "comparison" in document:
         comparison = document["comparison"]
         lines.extend(("", f"Comparison reading: {comparison['reading']}",
@@ -254,8 +281,8 @@ def report(run_id: str, published: float | None = None, sensitivity_path: Path |
                       f"Distance from published fraction: {document['distance_from_published']:.6f}",
                       f"Distance interval (95%): {document['distance_interval_95']}"))
         if comparison.get("not_whole_count"):
-            lines.append(f"Published fraction {comparison['published']} × {count} scored pairs is "
-                         "not a whole number (not_whole_count): shown as a reference only.")
+            lines.append(f"Published fraction {comparison['published']} × {expected_count} planned "
+                         "pairs is not a whole number (not_whole_count): shown as a reference only.")
     lines.extend(("", document["interpretation"]))
     lines.extend(("", "## Protocol provenance", "",
                   "| Field | Provenance |", "| --- | --- |"))

@@ -229,6 +229,9 @@ def _run_metadata(run_id: str, protocol: dict[str, Any], protocol_sha: str,
                         events=[])
         document["model_source_revision"] = (None if document["role"] == "fixture" else
                                               getattr(adapter, "source_revision", None))
+    elif subset_sha is not None:
+        # A legacy subset run binds its subset copy; a no-subset legacy run.json is unchanged.
+        document["subset_sha256"] = subset_sha
     return document
 
 
@@ -252,9 +255,7 @@ def start(protocol_path: Path, manifest_path: Path, tier: str, k: int, seed_base
     ids = _identity(protocol, manifest, tier)
     subset_bytes = None
     if subset_path is not None:
-        # §4 compatibility: a v0.7 protocol (no adapter) keeps v0.7 behavior, no subset.
-        if protocol.get("model", {}).get("adapter") is None:
-            raise DataError("subset runs need a protocol with a model adapter (§4)", 3)
+        # A legacy protocol may also use --subset; its extraction and scoring are unchanged.
         subset_bytes = subset_path.read_bytes()
         try:
             subset = json.loads(subset_bytes)
@@ -322,9 +323,11 @@ def resume(run_id: str, control: Any = None) -> str:
     _resource_host_check(run.protocol, _host())
     attempts = run.metadata["attempts"]
     if (control is None and run.metadata.get("events") is not None
-            and attempts and attempts[-1].get("ended") is None):
+            and attempts and attempts[-1].get("ended") is None
+            and not interruption_recorded(run.metadata, attempts[-1]["n"])):
         # The previous direct attempt ended without a checkpoint: a crash, kill or
-        # power loss. The runner records the same event for its steps.
+        # power loss. Nothing observed its item, so the event names none. The
+        # runner records the same event for its steps.
         run.metadata["events"].append(_interrupted_event(
             {"reason": "previous_attempt_ended", "attempt": attempts[-1]["n"]}, 0.0))
     _generate(run.directory, run.metadata, run.protocol, run.manifest, ids, existing, control)
@@ -333,6 +336,22 @@ def resume(run_id: str, control: Any = None) -> str:
 
 def _interrupted_event(detail: dict[str, Any], awake_s: float) -> dict[str, Any]:
     return {"type": "interrupted", "at_utc": _utc(), "awake_s": round(awake_s, 3), "detail": detail}
+
+
+def interruption_recorded(metadata: dict[str, Any], attempt: Any) -> bool:
+    """Whether an `interrupted` event already names this attempt; recovery adds no second."""
+    return any(event.get("type") == "interrupted"
+               and (event.get("detail") or {}).get("attempt") == attempt
+               for event in metadata.get("events", []))
+
+
+def _returned_output(body: bytes) -> str | None:
+    """The text a generation response returned, without keeping or logging it."""
+    try:
+        content = json.loads(body)["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+    return content if isinstance(content, str) else None
 
 
 def _prompt(protocol: dict[str, Any], problem: str) -> tuple[str, list[dict[str, str]]]:
@@ -523,6 +542,13 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                "status": "interrupted", "resumed_from": metadata["attempts"][-1]["n"] if metadata["attempts"] else None}
     metadata["attempts"].append(attempt)
     awake_start = time.monotonic()  # Does not advance during system sleep (macOS, Linux).
+    # The pair in progress and the output its current attempt actually returned, if any.
+    # Only its thinking state is ever persisted (§7 interruption states), never the text.
+    observed: dict[str, Any] = {"pair": None, "raw": None}
+
+    def observed_state() -> str | None:
+        raw = observed["raw"]
+        return adapter.split(raw)[2] if new_protocol and raw is not None else None
     if control is not None:
         control.bind(directory, metadata, attempt)
     write_json(directory / "run.json", metadata)
@@ -575,6 +601,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         continue
                     if control is not None and control.exhausted(item_id, sample):
                         continue
+                    observed.update(pair=(item_id, sample), raw=None)
                     seed = metadata["seeds"][sample]
                     payload = {"model": adapter.alias, "messages": messages,
                                "seed": seed, "stream": False, **settings}
@@ -584,6 +611,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         payload["stop"] = stop
 
                     def generate_once() -> tuple[str, bytes, dict[str, Any]]:
+                        observed["raw"] = None  # Each attempt is observed on its own.
                         if new_protocol:
                             try:
                                 rendered = runtime.render_prompt(session.port, session.key,
@@ -598,6 +626,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         status, body = send() if control is None else control.generate(session, send)
                         if status != 200:
                             raise DataError(f"generation returned HTTP {status}", 1)
+                        observed["raw"] = _returned_output(body)
                         try:
                             confirmed = runtime.confirm_sampling(session.port, session.key,
                                                                  {"seed": seed, **settings})
@@ -622,7 +651,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                                     http.client.HTTPException) as failure:
                                 classified = control.classify(failure, session)
                             if isinstance(classified, Interruption):
-                                control.interrupted(item_id, sample, classified.reason)
+                                control.interrupted(item_id, sample, classified.reason,
+                                                    observed_state())
                                 restart()
                                 continue
                             if not control.infra_failure(item_id, sample, classified.reason,
@@ -671,6 +701,7 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                     stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                     stream.flush()
                     os.fsync(stream.fileno())
+                    observed.update(pair=None, raw=None)
                     if control is not None:
                         control.item_done(item_id, sample)
         metadata["status"] = "completed"
@@ -687,13 +718,18 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
     except BaseException as error:
         metadata["status"] = "interrupted"
         attempt["status"] = "interrupted"
-        if control is None and new_protocol:
-            # §6.1: the item in progress is never written; the interruption is an
-            # event. A runner step records its own (plan_runner.PlanControl).
+        if new_protocol:
+            # §6.1: the item in progress is never written; the interruption is an event,
+            # bound to that item when there is one, with the state its attempt returned.
             detail = ({"reason": "signal"} if isinstance(error, KeyboardInterrupt) else
                       {"reason": "error", "error": type(error).__name__})
-            metadata["events"].append(_interrupted_event(
-                {**detail, "attempt": attempt["n"]}, time.monotonic() - awake_start))
+            detail["attempt"] = attempt["n"]
+            if observed["pair"] is not None:
+                detail.update(item_id=observed["pair"][0], sample_index=observed["pair"][1])
+                state = observed_state()
+                if state is not None:
+                    detail["thinking_state"] = state
+            metadata["events"].append(_interrupted_event(detail, time.monotonic() - awake_start))
         raise
     finally:
         session.stop()

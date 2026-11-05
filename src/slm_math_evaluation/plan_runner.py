@@ -807,19 +807,25 @@ class Worker:
             raise _Stopped(error.code, str(error)) from error
 
     # Steps
-    def _command(self, number: int, arguments: list[str], interrupt_on_error: bool = False,
-                 downloads: bool = False) -> None:
-        """Run one ``slm-eval`` command child; only downloading steps keep HF credentials."""
+    def _command(self, number: int, arguments: list[str], downloads: bool = False) -> None:
+        """Run one ``slm-eval`` command child; only downloading steps keep HF credentials.
+
+        Exits 2, 3 and 4 stop the plan. Exit 1 or a signal stops it too, unless this
+        worker observed a sleep gap while the child ran: that is §13.5 evidence of an
+        interruption, which spends no budget and is resumed by hand. An exit code
+        alone, such as a convert exit 1, is no evidence of a lost network.
+        """
         command = [sys.executable, "-m", "slm_math_evaluation.cli", *arguments]
         environment = None if downloads else runtime.credential_free_environment()
         with self.state.runner_log.open("ab") as log:
             process = self.deps.popen(command, cwd=REPO, stdin=subprocess.DEVNULL, stdout=log,
                                       stderr=log, start_new_session=True, env=environment)
         self.record_process("step", process.pid, ["slm_math_evaluation.cli", arguments[0]])
+        slept = False
         try:
             while process.poll() is None:
                 self.deps.sleep(self.deps.poll_interval)
-                self.observe_clock(number)
+                slept = self.observe_clock(number) > 0 or slept
                 if self.requested_pause() == "now":
                     self._stop_child(process)
                     raise _Paused("now", {"discarded": {"command": arguments[0]}})
@@ -827,12 +833,12 @@ class Worker:
             if process.poll() is None:
                 self._stop_child(process)
             self.record_process("step", None)
+        slept = self.observe_clock(number) > 0 or slept  # A gap just before the exit.
         code = process.returncode
         if code == 0:
             return
-        detail = {"command": arguments[0], "exit_code": code}
-        if code == 1 and interrupt_on_error:
-            raise _Interrupted({"reason": "step_error", **detail})
+        if code not in (2, 3, 4) and slept:
+            raise _Interrupted({"reason": "sleep", "command": arguments[0], "exit_code": code})
         raise _Stopped(code if code in (1, 2, 3, 4) else 1,
                        f"{' '.join(arguments[:2])} exited {code}")
 
@@ -850,9 +856,7 @@ class Worker:
                 return
 
     def _step_convert(self, number: int, step: dict[str, Any]) -> None:
-        # A failed download is a lost network, an interruption; resume retries it.
-        self._command(number, ["model", "convert", "--spec", step["spec"]],
-                      interrupt_on_error=True, downloads=True)
+        self._command(number, ["model", "convert", "--spec", step["spec"]], downloads=True)
 
     def _step_sanity(self, number: int, step: dict[str, Any]) -> None:
         # A sanity reference file is downloaded from its pinned source (§12.4).
@@ -898,9 +902,11 @@ class Worker:
                 raise _Stopped(2, "stored run identity differs from the plan step")
             if metadata.get("status") == "completed":
                 return
-            if metadata.get("status") in ("in_progress", "interrupted"):
-                # The previous attempt ended without a checkpoint (§6.1, §6.3).
-                attempts = metadata.get("attempts") or [{"n": None}]
+            attempts = metadata.get("attempts") or [{"n": None}]
+            if (metadata.get("status") in ("in_progress", "interrupted")
+                    and not runner.interruption_recorded(metadata, attempts[-1]["n"])):
+                # The previous attempt ended with no recorded interruption (§6.1, §6.3):
+                # a crash or kill. Nothing observed its item, so the event names none.
                 control.pending.append(("interrupted", {"reason": "previous_attempt_ended",
                                                         "attempt": attempts[-1]["n"]}))
             torn = _discard_partial_item(directory)
@@ -1138,8 +1144,13 @@ class PlanControl:
         self._observe()
         return self._lost("server_crash" if not session.alive() else "server_error")
 
-    def interrupted(self, item_id: str, sample: int, reason: str) -> None:
-        self.event("interrupted", {"item_id": item_id, "sample_index": sample, "reason": reason})
+    def interrupted(self, item_id: str, sample: int, reason: str,
+                    thinking_state: str | None = None) -> None:
+        """Record an item's interruption; its state only if that attempt returned output."""
+        detail = {"item_id": item_id, "sample_index": sample, "reason": reason}
+        if thinking_state is not None:
+            detail["thinking_state"] = thinking_state
+        self.event("interrupted", detail)
         self.item_gap = False
 
     def infra_failure(self, item_id: str, sample: int, reason: str, retries: int,

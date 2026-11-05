@@ -25,8 +25,11 @@ its exit code. The `slm-eval run` command path is unchanged.
   subset's IDs, in tier order. The run directory keeps a byte copy,
   `subset.json`, whose SHA-256 is `run.json` `subset_sha256`. `resume` and
   `report` read only that copy; a changed copy exits `2` and a missing one `3`.
-  A resumed plan step also checks that `run.json` binds the step's subset. A
-  v0.7 protocol, which has no adapter, keeps v0.7 behavior: `--subset` exits `3`.
+  A resumed plan step also checks that `run.json` binds the step's subset. The
+  original subset path may be moved or removed after the run starts. A v0.7
+  protocol may use `--subset` too. Its `run.json` then adds `subset_sha256`, and
+  its extraction, scoring and record shape are unchanged. A v0.7 run without a
+  subset is unchanged.
 - **Start checks.** In addition to the three §13.2 bindings, `runner start`
   makes these checks:
   - Every pinned repository input exists (exit `3`) and matches its hash
@@ -43,19 +46,26 @@ its exit code. The `slm-eval run` command path is unchanged.
   verifies them again when it starts. A plan that has only approval steps left
   needs no runtime files, and no server ever starts for an approval step.
 - **Harness revision.** This is the checked-out commit. A tree with
-  uncommitted changes never matches a binding. Resume re-checks the revision.
-- **Attempts.** `attempts_allowed` counts `runner start` calls for one plan.
-  `runner start` can restart a plan only when it is `stopped`, attempts remain,
-  and its stored plan and authorization copies are byte-identical. A restart
-  continues from the checkpoint. Pauses and interruptions never count as
-  attempts.
+  uncommitted changes never matches a binding, and neither does one with
+  untracked files that aren't ignored. Ignored run and cache files don't count.
+  Resume re-checks the revision.
+- **Attempts.** `attempts_allowed` counts admitted `runner start` calls for one
+  plan. A start refused before admission, for example on a hash or
+  authorization mismatch, spends none. `runner start` can restart a plan only
+  when it is `stopped`, attempts remain, and its stored plan and authorization
+  copies are byte-identical. A restart continues from the checkpoint. Pauses,
+  interruptions, approval waits and resumes never count as attempts. Attempts
+  are separate from per-item infrastructure retries.
 - **Active plan.** One plan per run store may be non-terminal. With none
   active, `runner status` shows the most recently updated finished plan.
 - **Command exit codes:**
   - Exits `2`, `3` and `4` stop the plan.
-  - A convert exit of `1` (for example a lost network) marks the plan
-    `interrupted`.
-  - Any other exit of `1` stops the plan.
+  - Exit `1`, or a child ended by a signal, also stops the plan, unless the
+    worker itself observed a sleep gap while that child ran. A sleep gap is
+    §13.5 evidence of an interruption: the plan is then `interrupted`, spends
+    no attempt or retry, and is resumed by hand. An exit code alone is no
+    evidence. A convert exit `1`, for instance, may be a genuine tool failure
+    rather than a lost network.
   - Reaching the 5% rule also stops the plan; no command exit code applies.
 - **Infrastructure failures.** These are:
   - an HTTP 5xx response;
@@ -80,8 +90,9 @@ its exit code. The `slm-eval run` command path is unchanged.
   - Unterminated tails of `items.jsonl` and `attempts.log.jsonl` are dropped,
     and their hashes are recorded.
   - Orphaned server or step processes are stopped.
-  - The run's `events` receive an `interrupted` event for the attempt that
-    ended without a checkpoint.
+  - The run's `events` receive a `previous_attempt_ended` interruption for an
+    attempt that ended without recording an interruption of its own, such as
+    after `kill -9` or power loss. That event names no item.
 - **Fixture templates.** A `role: fixture` protocol pins the SHA-256 of the
   template embedded in its own file. That hash is still verified against the
   file before use. Target protocols still require the approved source template
@@ -109,24 +120,44 @@ its exit code. The `slm-eval run` command path is unchanged.
 - **Report counts.** For v0.8 runs, `report` adds the §7 counts:
   - missing final answers (extraction status `no_answer` or `truncated`);
   - infrastructure failures (pairs that exhausted their retries);
-  - `interrupted` events in `run.json`.
+  - `interrupted` events in `run.json`, with `interruption_thinking_states`.
+    That is the distribution of the interrupted attempts' own states: the four
+    §8 states, plus two bins. `unknown` is an event naming an item × sample
+    whose attempt returned nothing to classify, or an older event without
+    state metadata. `no_item` is an event that names no item × sample. The two
+    bins are not thinking states, and all six sum to the interruption count.
 
-  Exhausted pairs are never written to `items.jsonl`. They are neither wrong
-  answers nor part of an accuracy denominator, and `completeness` counts them
-  as missing. A subset run reports the subset's size as its expected item count.
+  Accuracy and its intervals are over the scored item × sample pairs.
+  Exhausted pairs are never written to `items.jsonl`, so they are neither
+  wrong answers nor part of an accuracy denominator. `completeness` gives
+  `planned_pairs` (for the declared run, or its subset), `scored_pairs` and
+  `exhausted_pairs`. A result with fewer scored than planned pairs, or an
+  unfinished run, is marked incomplete: `complete` is `false`, and `report.md`
+  says the accuracy is conditional and not a completed evaluation.
 
   With `--compare-published V`, a v0.8 report also sets the comparison's
-  `not_whole_count` flag. The flag is set when `V` times the scored item ×
-  sample pairs is not a whole number. `V` is still shown and still read, with
-  the same comparison reading. Reports of v0.7 runs are unchanged.
+  `not_whole_count` flag. The flag is set when `V` times the planned pairs is
+  not a whole number. That still holds when infrastructure failures leave
+  fewer pairs scored. `V` is still shown and still read, with the same
+  comparison reading. Reports of v0.7 runs are unchanged. A v0.7 subset run's
+  report also names its `subset_sha256`.
+- **Interruption states.** When an attempt is interrupted after its response
+  arrived, the pinned adapter classifies the output that attempt returned. Only
+  the resulting `thinking_state` goes into the event; the text is never kept.
+  Two examples: a server lost across a sleep before sampling is confirmed, and
+  a signal before the record is written. The state is never taken from a later
+  retry. Generation is not streamed, so an attempt lost before its response
+  arrived has no output to classify, and its event carries no state.
 - **Direct-run interruptions.** A v0.8 `slm-eval run` that ends on a signal,
   or on an unexpected error that leaves it `interrupted`, records an
-  `interrupted` event. Its reason is `signal` or `error`, and it names the
-  attempt. A `resume` after an attempt that ended without a checkpoint (a
-  crash, `kill -9` or power loss) records `previous_attempt_ended`, as runner
-  steps do. Exits for integrity, precondition or HTTP errors are not
-  interruptions. The item in progress is never recorded, and v0.7 runs gain no
-  events.
+  `interrupted` event. Its reason is `signal` or `error`. It names the attempt,
+  the item × sample in progress if there is one, and that attempt's state when
+  it was observed. Runner steps record the same event when their worker is
+  signaled or hits an unexpected error. A `resume` after an attempt that
+  recorded no interruption (a crash, `kill -9` or power loss) records
+  `previous_attempt_ended`, as runner steps do. Exits for integrity,
+  precondition or HTTP errors are not interruptions. The item in progress is
+  never recorded, and v0.7 runs gain no events.
 
 ## Fixture verification
 
@@ -192,17 +223,28 @@ each model-server, `--version`, converter-tool and local-helper path. The same
 file drives a fake transport through urllib's real redirect handling, covering
 same-origin, cross-origin, changed-port, downgrade, redirect-chain and resumed
 CDN downloads.
-[`tests/test_report_counts.py`](../tests/test_report_counts.py) covers the §7
-counts, the `not_whole_count` flag and the unchanged v0.7 report.
-`tests/test_plan_runner.py` also covers approval-only plans in an empty cache
-and direct-run interruption events.
+[`tests/test_report_counts.py`](../tests/test_report_counts.py) covers:
+
+- the §7 counts and the interruption-state bins;
+- completeness;
+- `not_whole_count` on planned versus scored pairs;
+- the unchanged v0.7 report.
+
+`tests/test_plan_runner.py` also covers:
+
+- approval-only plans in an empty cache;
+- direct and runner interruption events, including an interrupted attempt's
+  state that differs from its retry's;
+- a v0.7 protocol with and without `--subset`;
+- command exits with and without an observed sleep;
+- refused starts that spend no attempt;
+- a disk that also blocks status and log writes.
 
 ## Limits
 
-- The §7 distribution of `thinking_state` across interruptions is not reported.
-  An interrupted generation is never recorded (§6.1), so its own thinking state
-  is unknown. Which records the distribution should cover awaits a contract
-  clarification.
+- Interruption states come only from output an interrupted attempt actually
+  returned. In the fault-injection tests that happens when an item is lost
+  after its response arrived. A run interrupted mid-generation reports `unknown`.
 - Direct-run interruption events and download redirect scoping are verified by
   deterministic tests only: injected signals, and a fake transport behind
   urllib's own redirect handling. No real signal was sent to a model run, and
@@ -218,9 +260,10 @@ and direct-run interruption events.
   free space of the run-store volume itself, and the contract defines no
   run-store floor. A failed run-store write is handled as an interruption. Fault
   injection of a short `items.jsonl` write (`ENOSPC`) leaves the plan
-  `interrupted`, with the server stopped and the sleep lock released. `resume`
-  drops the torn line and regenerates only that item. By inspection only, not
-  fault injection: if the attempt log or `status.json` can't be written either,
-  the worker exits in state `running`, and `resume` records that as an
-  interruption.
+  `interrupted`, with the server stopped and the sleep lock released. No model
+  retry is spent. `resume` drops the torn line and regenerates only that item.
+  Fault injection also covers the case where the attempt log and `status.json`
+  can't be written either. The worker then exits in state `running` and claims
+  no checkpoint, and `resume` records the interruption. No proactive run-store
+  floor is defined.
 - Delivery of notifications was not confirmed.

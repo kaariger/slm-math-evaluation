@@ -34,6 +34,10 @@ REAL_CHECK_RUNTIME = plan_runner.check_runtime
 PROTOCOL = "configs/protocols/fixture-runner.yaml"
 SPEC = "configs/models/fixture-runner-spec.yaml"
 HARNESS = "a" * 40
+MARKER = "INTERRUPTED-PREFIX-MARKER"
+RETURNED = {"present": f"<think>{MARKER} reasoning</think> \\boxed{{3}}",
+            "empty": f"<think> </think> {MARKER} \\boxed{{3}}",
+            "unterminated": f"<think>{MARKER} still reasoning"}
 
 
 def _sha(content: bytes) -> str:
@@ -157,6 +161,7 @@ class Harness:
         self.slots_keys: list[str | None] = []
         self.memory: list[float] = []
         self.leak_key = False
+        self.after_return: str | None = None
         self.generating = False
         self.decoded = 0
         self.ids = [f"train/item-{n}" for n in range(items)]
@@ -343,6 +348,17 @@ class Harness:
             raise SimulatedCrash()
         if behavior == "keyboard_interrupt":  # SIGINT, or SIGTERM/SIGHUP via the cleanup handler.
             raise KeyboardInterrupt
+        if behavior.startswith("returned_"):
+            # The attempt returns output, then is lost before it is recorded: across a
+            # sleep (the server is gone when sampling is confirmed) or to a signal.
+            _, state, _, then = behavior.split("_")
+            if then == "sleep":
+                self.clock.system_sleep(30)
+                time.sleep(0.01)
+            self.after_return = then
+            return 200, json.dumps({"choices": [{"message": {"content": RETURNED[state]},
+                                                 "finish_reason": "stop"}],
+                                    "usage": {"completion_tokens": 9}}).encode()
         raise AssertionError(behavior)
 
     # Inspection
@@ -719,8 +735,17 @@ class PauseAndRecoveryTests(RunnerHarnessCase):
         self.assertFalse(h.state().worker_alive())
         report = plan_runner.status_report()
         self.assertFalse(report["worker_running"])
-        # A crash mid-write leaves an unterminated item fragment and log tail.
+        # SimulatedCrash still runs the run's handlers, which record a bound event; a
+        # real kill -9 runs none. Restore run.json to its last pre-crash durable form.
         directory = h.run().directory
+        metadata = h.run().metadata
+        self.assertEqual([e["detail"] for e in metadata["events"] if e["type"] == "interrupted"],
+                         [{"reason": "error", "error": "SimulatedCrash", "attempt": 1,
+                           "item_id": h.ids[1], "sample_index": 0}])
+        metadata["events"] = [e for e in metadata["events"] if e["type"] != "interrupted"]
+        metadata["attempts"][-1].update(status="interrupted", ended=None)
+        data.write_json(directory / "run.json", {**metadata, "status": "in_progress"})
+        # A crash mid-write leaves an unterminated item fragment and log tail.
         with (directory / "items.jsonl").open("ab") as stream:
             stream.write(b'{"item_id":"' + h.ids[1].encode() + b'","sample_')
         with h.state().log_path.open("ab") as stream:
@@ -881,8 +906,9 @@ class InterruptionAndResourceTests(RunnerHarnessCase):
         self.assert_items(h.ids[:1])
 
     def test_disk_floor_breach_and_command_exit_codes(self) -> None:
+        # A convert exit 1 alone is no evidence of a lost network: it stops (ruling P8).
         for name, kind, code, state in (("convert", "convert", 3, "stopped"),
-                                        ("convert", "convert", 1, "interrupted"),
+                                        ("convert", "convert", 1, "stopped"),
                                         ("verify-runtime", "verify", 4, "stopped"),
                                         ("sanity", "sanity", 1, "stopped")):
             with self.subTest(name=name, code=code):
@@ -895,6 +921,33 @@ class InterruptionAndResourceTests(RunnerHarnessCase):
                 self.assertEqual(status["last_event"]["detail"]["exit_code"], code)
                 self.assertFalse(self.h.sleep_lock.held)
                 self.assertEqual(self.h.generation_calls, [])
+
+    def test_only_an_observed_sleep_makes_a_failed_command_an_interruption(self) -> None:
+        """P8: exit 1 or a signal is an interruption only with the worker's own sleep evidence."""
+        h = self.h
+        for code, sleeps, state in ((1, False, "stopped"),      # a genuine convert failure
+                                    (1, True, "interrupted"),    # the machine slept meanwhile
+                                    (-9, False, "stopped"),      # killed, cause unknown
+                                    (-9, True, "interrupted"),
+                                    (3, True, "stopped"),        # 2, 3 and 4 always stop
+                                    (2, True, "stopped")):
+            with self.subTest(code=code, sleeps=sleeps):
+                self.tearDown_state()
+                h.command_codes = {"convert": (code, 3)}
+                h.command_hooks = {2: (lambda: h.clock.system_sleep(30)) if sleeps else None}
+                self.start(h.steps("convert", "smoke"), attempts=1)
+                status = h.status()
+                self.assertEqual((status["state"], status["completed_steps"]), (state, 0))
+                detail = status["last_event"]["detail"]
+                if state == "interrupted":
+                    self.assertEqual(detail, {"reason": "sleep", "command": "model", "exit_code": code})
+                    # Resumed by hand; no start attempt or retry is spent.
+                    h.command_codes, h.command_hooks = {}, {}
+                    self.resume()
+                    self.assertEqual((h.status()["state"], h.status()["starts"]), ("completed", 1))
+                else:
+                    self.assertEqual(detail["exit_code"], code if code in (1, 2, 3) else 1)
+                self.assertFalse(self.h.sleep_lock.held)
 
     def tearDown_state(self) -> None:
         import shutil
@@ -1035,9 +1088,32 @@ class SubsetRunnerTests(RunnerHarnessCase):
         self.assertFalse((self.root / "runs" / "_runner").exists())
         self.assertEqual(h.generation_calls, [])
 
+    def test_a_subset_changed_before_its_step_stops_the_plan(self) -> None:
+        """P1: the committed subset is checked again when its step starts."""
+        import shutil
+        h = self.h
+        steps = h.steps("verify") + self.subset_steps()
+        for change, code in ((lambda: h.write(plan_runner.SUBSET, self.subset_bytes + b" "), 2),
+                             (lambda: (h.repo / plan_runner.SUBSET).unlink(missing_ok=True), 3)):
+            with self.subTest(code=code):
+                shutil.rmtree(self.root / "runs", ignore_errors=True)
+                h.generation_calls.clear()
+                h.write(plan_runner.SUBSET, self.subset_bytes)
+                h.command_hooks = {1: change}  # During the verify step, after admission.
+                self.start(steps, subsets=[self.subset_sha])
+                status = h.status()
+                self.assertEqual((status["state"], status["step"], status["completed_steps"]),
+                                 ("stopped", 3, 2))
+                self.assertEqual(status["last_event"]["detail"]["exit_code"], code)
+                self.assertEqual([item for item, _ in h.generation_calls], h.ids[:2])  # Smoke only.
+        h.write(plan_runner.SUBSET, self.subset_bytes)
+
     def test_direct_run_subset_generates_binds_and_resumes(self) -> None:
         h = self.h
-        self.assertEqual(self.cli_run("--subset", str(self.subset_path)), 0)
+        explicit = self.inputs / "explicit-subset.json"
+        explicit.write_bytes(self.subset_bytes)
+        self.assertEqual(self.cli_run("--subset", str(explicit)), 0)
+        explicit.unlink()  # P4: the stored copy, not the original path, serves resume.
         run_id = self.output.getvalue().split()[-1]
         run = load_run(run_id)
         self.assertEqual(run.metadata["subset_sha256"], self.subset_sha)
@@ -1058,10 +1134,46 @@ class SubsetRunnerTests(RunnerHarnessCase):
         (run.directory / "subset.json").unlink()
         self.assert_exit(3, runner.resume, run_id)
 
+    def test_legacy_protocol_may_use_an_explicit_subset(self) -> None:
+        """P3: a valid v0.7 protocol accepts --subset; its no-subset run is unchanged."""
+        h = self.h
+        legacy = json.loads((ROOT / "configs/protocols/protocol.yaml").read_text())
+        legacy_path = self.inputs / "legacy-copy.yaml"  # A copy; the frozen file is never written.
+        legacy_path.write_bytes((ROOT / "configs/protocols/protocol.yaml").read_bytes())
+        runs = []
+        # The fake server reports the fixture alias; the legacy settings check is not under test.
+        with patch.object(runner.runtime, "sha256_file", lambda _path: legacy["model"]["artifact"]["sha256"]), \
+                patch.object(runner, "_effective_settings", return_value={}):
+            for extra in (("--subset", str(self.subset_path)), ()):
+                self.assertEqual(self.cli_run(*extra, protocol=legacy_path), 0)
+                runs.append(load_run(self.output.getvalue().split()[-1]))
+        with_subset, without = runs
+        self.assertEqual(with_subset.metadata["subset_sha256"], self.subset_sha)
+        self.assertEqual((with_subset.directory / "subset.json").read_bytes(), self.subset_bytes)
+        self.assertEqual([row["item_id"] for row in with_subset.items], self.subset["ids"])
+        self.assertEqual(sorted(row["item_id"] for row in without.items), sorted(h.ids[2:]))
+        # Legacy records and run.json keep the v0.7 shape; only the subset binding is added.
+        v08_record_fields = {"thinking_state", "infra_retries", "awake_ms"}
+        for run in runs:
+            self.assertFalse(v08_record_fields & set(run.items[0]))
+            self.assertFalse({"events", "role", "chat_template_sha256"} & set(run.metadata))
+        self.assertEqual(set(with_subset.metadata) - set(without.metadata), {"subset_sha256"})
+        self.assertFalse((without.directory / "subset.json").exists())
+        # Report uses the subset as the planned item set; rescore is unchanged.
+        for run in runs:
+            with patch.object(sys, "stderr", io.StringIO()):
+                self.assertEqual(cli.main(["report", "--run", run.metadata["run_id"]]), 0)
+                self.assertEqual(cli.main(["rescore", "--run", run.metadata["run_id"]]), 0)
+        report = json.loads((with_subset.directory / "report.json").read_text())
+        self.assertEqual(report["completeness"], {"observed_items": 3, "expected_items": 3,
+                                                  "complete": True})
+        self.assertEqual(report["subset_sha256"], self.subset_sha)
+        self.assertNotIn("subset_sha256", json.loads((without.directory / "report.json").read_text()))
+        for run in runs:
+            self.assertTrue(json.loads((run.directory / "rescore.json").read_text())["all_match"])
+
     def test_direct_run_refuses_mismatched_and_malformed_subsets(self) -> None:
         h = self.h
-        legacy = self.inputs / "v07-protocol.yaml"
-        legacy.write_bytes((ROOT / "configs/protocols/protocol.yaml").read_bytes())
         cases = [
             (2, [], self.variant("other-manifest.json", manifest_sha256="e" * 64), "validation"),
             (2, [], self.subset_path, "smoke"),
@@ -1071,7 +1183,6 @@ class SubsetRunnerTests(RunnerHarnessCase):
             (3, [], self.variant("size.json", size=2), "validation"),
             (3, [], self.variant("empty.json", ids=[], size=0), "validation"),
             (3, [], self.inputs / "missing.json", "validation"),
-            (3, ["--protocol", str(legacy)], self.subset_path, "validation"),
         ]
         (self.inputs / "not-json.json").write_bytes(b"{")
         cases.append((3, [], self.inputs / "not-json.json", "validation"))
@@ -1123,6 +1234,62 @@ class RuntimeRequirementTests(RunnerHarnessCase):
         self.assertEqual(h.status()["state"], "completed")
 
 
+class InterruptionStateTests(RunnerHarnessCase):
+    """P2: an interruption records its own attempt's state, never a later retry's or its text."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        h = self.h
+
+        def confirm(*_args):
+            then, h.after_return = h.after_return, None
+            if then == "sleep":
+                raise ConnectionResetError("server lost after returning")
+            if then == "signal":
+                raise KeyboardInterrupt
+            return {}
+
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(runner.runtime, "confirm_sampling", side_effect=confirm))
+
+    def assert_no_interrupted_text(self) -> None:
+        stored = [p for p in (self.root / "runs").rglob("*") if p.is_file()
+                  and MARKER.encode() in p.read_bytes()]
+        self.assertEqual(stored, [])
+
+    def test_runner_keeps_the_interrupted_attempts_state_not_the_retrys(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "returned_present_then_sleep"
+        self.start(h.steps("smoke"))
+        self.assertEqual(h.status()["state"], "completed")
+        run = h.run()
+        events = [e["detail"] for e in run.metadata["events"] if e["type"] == "interrupted"]
+        self.assertEqual(events, [{"item_id": h.ids[1], "sample_index": 0, "reason": "sleep",
+                                   "thinking_state": "present"}])
+        scored = {row["item_id"]: row for row in run.items}[h.ids[1]]
+        self.assertEqual((scored["thinking_state"], scored["infra_retries"]), ("absent", 0))
+        self.assert_no_interrupted_text()
+
+    def test_direct_signal_after_a_returned_attempt_keeps_that_state(self) -> None:
+        h = self.h
+        for state in ("empty", "unterminated"):
+            with self.subTest(state=state):
+                h.generation_calls.clear()
+                h.behaviors = {(h.ids[1], 0): f"returned_{state}_then_signal"}
+                with self.assertRaises(KeyboardInterrupt):
+                    runner.start(h.repo / PROTOCOL, h.repo / plan_runner.MANIFEST, "smoke", 1, 0)
+                run_id = self.output.getvalue().split()[-1]
+                runner.resume(run_id)
+                run = load_run(run_id)
+                events = [e["detail"] for e in run.metadata["events"] if e["type"] == "interrupted"]
+                self.assertEqual(events, [{"reason": "signal", "attempt": 1, "item_id": h.ids[1],
+                                           "sample_index": 0, "thinking_state": state}])
+                scored = {row["item_id"]: row for row in run.items}[h.ids[1]]
+                self.assertEqual(scored["thinking_state"], "absent")
+                self.assert_no_interrupted_text()
+
+
 class DirectInterruptionTests(RunnerHarnessCase):
     """F2: a direct v0.8 `slm-eval run` records its interruptions in run.json events."""
 
@@ -1142,7 +1309,9 @@ class DirectInterruptionTests(RunnerHarnessCase):
         run = load_run(run_id)
         self.assertEqual((run.metadata["status"], run.metadata["attempts"][-1]["status"]),
                          ("interrupted", "interrupted"))
-        self.assertEqual(self.interrupted(run_id), [{"reason": "signal", "attempt": 1}])
+        # Bound to the item in progress; its attempt returned nothing, so no state (unknown).
+        signal_event = {"reason": "signal", "attempt": 1, "item_id": h.ids[1], "sample_index": 0}
+        self.assertEqual(self.interrupted(run_id), [signal_event])
         self.assertEqual([row["item_id"] for row in run.items], h.ids[:1])  # Nothing partial.
         self.assertFalse(h.servers[-1].alive)
         self.assertEqual(runner.resume(run_id), run_id)
@@ -1150,7 +1319,7 @@ class DirectInterruptionTests(RunnerHarnessCase):
         self.assertEqual(resumed.metadata["status"], "completed")
         self.assertEqual(sorted(row["item_id"] for row in resumed.items), h.ids)
         self.assertEqual([item for item, _ in h.generation_calls], [h.ids[0], h.ids[1], h.ids[1], h.ids[2]])
-        self.assertEqual(self.interrupted(run_id), [{"reason": "signal", "attempt": 1}])  # Not twice.
+        self.assertEqual(self.interrupted(run_id), [signal_event])  # Not twice.
         self.assertTrue(all(row["infra_retries"] == 0 for row in resumed.items))
 
     def test_an_attempt_without_a_checkpoint_is_recorded_on_resume(self) -> None:
@@ -1247,12 +1416,125 @@ class RunStoreWriteFailureTests(RunnerHarnessCase):
         self.assert_items()
         self.assertEqual([item for item, _ in h.generation_calls],
                          [h.ids[0], h.ids[1], h.ids[1], h.ids[2]])
-        reasons = [e["detail"].get("reason") for e in h.run().metadata["events"]
-                   if e["type"] == "interrupted"]
-        self.assertEqual(reasons, ["previous_attempt_ended", "partial_item_write_discarded"])
+        events = h.run().metadata["events"]
+        interrupted = [e["detail"] for e in events if e["type"] == "interrupted"]
+        # The failed write is recorded when it happens, bound to its item, with the
+        # state of the output that attempt returned; the torn line is recovery evidence.
+        self.assertEqual(interrupted[0], {"reason": "error", "error": "OSError", "attempt": 1,
+                                          "item_id": h.ids[1], "sample_index": 0,
+                                          "thinking_state": "absent"})
+        self.assertEqual([d["reason"] for d in interrupted[1:]], ["partial_item_write_discarded"])
+        # P5: no model retry was spent and nothing partial was scored.
+        self.assertNotIn("infra_retry", [e["type"] for e in events])
+        self.assertTrue(all(row["infra_retries"] == 0 for row in h.run().items))
+
+
+class AdmissionAndRecoveryTests(RunnerHarnessCase):
+    """P5, P6 and P7 clauses already implemented, shown on distinguishing cases."""
+
+    def test_rejected_starts_and_resumes_spend_no_attempt(self) -> None:
+        h = self.h
+        h.command_codes["sanity"] = (1, 0)
+        plan, authorization = h.plan(h.steps("sanity", "smoke"), attempts=2)
+        plan_runner.start(plan, authorization, h.deps(), _sync_launch)
+        self.assertEqual((h.status()["state"], h.status()["starts"]), ("stopped", 1))
+        # Rejected before admission: a changed pinned input, then a changed authorization.
+        h.write(SPEC, h.spec_bytes + b" ")
+        self.assert_exit(2, plan_runner.start, plan, authorization, h.deps(), _sync_launch)
+        h.write(SPEC, h.spec_bytes)
+        original = authorization.read_bytes()
+        authorization.write_bytes(original.replace(b"synthetic-fixture", b"someone-else"))
+        self.assert_exit(2, plan_runner.start, plan, authorization, h.deps(), _sync_launch)
+        authorization.write_bytes(original)
+        self.assertEqual(h.status()["starts"], 1)
+        # The one admission left continues from the checkpoint; a pause and resume
+        # inside it spend nothing more.
+        h.command_codes = {}
+        h.behaviors[(h.ids[1], 0)] = "pause_after"
+        plan_runner.start(plan, authorization, h.deps(), _sync_launch)
+        self.assertEqual((h.status()["state"], h.status()["starts"]), ("paused", 2))
+        self.resume()
+        self.assertEqual((h.status()["state"], h.status()["starts"]), ("completed", 2))
+        self.assertEqual([c[:2] for c in h.commands], [["model", "sanity"], ["model", "sanity"]])
+
+    def test_resume_rechecks_the_harness_revision(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[0], 0)] = "pause_after"
+        self.start(h.steps("smoke"))
+        self.assertEqual(h.status()["state"], "paused")
+        with patch.object(plan_runner, "harness_revision", lambda: "b" * 40):
+            self.assert_exit(2, self.resume)
+        with patch.object(plan_runner, "harness_revision", lambda: HARNESS + "+uncommitted"):
+            self.assert_exit(2, self.resume)
+        self.assertEqual(h.status()["state"], "paused")
+        self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+
+    def test_a_full_disk_that_blocks_status_and_log_claims_no_checkpoint(self) -> None:
+        """P5: an item write fails, then status and log writes fail too: state stays running."""
+        import errno
+        h = self.h
+        real_fsync, real_append, failed = os.fsync, plan_runner.State.append, []
+
+        def fsync(descriptor: int) -> None:
+            items = list((self.root / "runs").glob("*/items.jsonl"))
+            if (not failed and items and os.fstat(descriptor).st_ino == items[0].stat().st_ino
+                    and items[0].read_bytes().count(b"\n") == 2):
+                failed.append(items[0])
+                os.truncate(items[0], items[0].stat().st_size - 5)
+                raise OSError(errno.ENOSPC, "No space left on device")
+            real_fsync(descriptor)
+
+        def append(state, clock, step, event, detail=None):
+            if failed:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real_append(state, clock, step, event, detail)
+
+        with patch.object(runner.os, "fsync", side_effect=fsync), \
+                patch.object(plan_runner.State, "append", append), \
+                self.assertRaises(OSError):
+            self.start(h.steps("smoke"))
+        status = h.status()
+        self.assertEqual(status["state"], "running")  # No successful checkpoint is claimed.
+        self.assertNotIn(status["last_event"]["event"], ("interrupted", "completed", "paused"))
+        self.assertFalse(h.servers[-1].alive)
+        self.assertFalse(h.sleep_lock.held)
+        self.resume()
+        self.assertEqual(h.status()["state"], "completed")
+        self.assertEqual([item for item, _ in h.generation_calls], [h.ids[0], h.ids[1], h.ids[1], h.ids[2]])
+        self.assertTrue(all(row["infra_retries"] == 0 for row in self.assert_items()))
+        self.assertIn("worker_ended", [e["detail"].get("reason") for e in h.events("interrupted")])
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_harness_revision_is_the_clean_checked_out_commit(self) -> None:
+        """P7: nonignored untracked or changed files match no revision; ignored files do."""
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture",
+                                       "-c", "user.email=fixture@example.invalid",
+                                       "-c", "commit.gpgsign=false", *arguments],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+
+            git("init", "-q")
+            (repo / ".gitignore").write_text("runs/\n")
+            (repo / "tracked.txt").write_text("tracked\n")
+            git("add", ".")
+            git("commit", "-q", "-m", "fixture")
+            head = git("rev-parse", "HEAD")
+            with patch.object(plan_runner, "REPO", repo):
+                self.assertEqual(plan_runner.harness_revision(), head)
+                (repo / "runs").mkdir()
+                (repo / "runs" / "run.json").write_text("{}\n")          # ignored
+                self.assertEqual(plan_runner.harness_revision(), head)
+                (repo / "stray.txt").write_text("stray\n")               # nonignored, untracked
+                self.assertEqual(plan_runner.harness_revision(), head + "+uncommitted")
+                (repo / "stray.txt").unlink()
+                (repo / "tracked.txt").write_text("changed\n")           # uncommitted change
+                self.assertEqual(plan_runner.harness_revision(), head + "+uncommitted")
+
     def test_fixture_pins_its_own_template_and_targets_keep_the_source_pin(self) -> None:
         protocol = json.loads((ROOT / "configs/protocols/fixture-smollm2-135m.yaml").read_text())
         adapter = runner.model_adapters.from_protocol(protocol)

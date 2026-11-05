@@ -105,9 +105,14 @@ class ReportCountTests(unittest.TestCase):
             {"type": "infra_retry", "detail": {**exhausted, "retry": None, "exhausted": True}},
             {"type": "infra_retry", "detail": {"item_id": self.ids[0], "sample_index": 0,
                                                "reason": "server_error", "retry": 1}},
+            # An older event bound to a pair, without state metadata: unknown.
             {"type": "interrupted", "detail": {"item_id": self.ids[1], "sample_index": 0,
                                                "reason": "sleep"}},
+            # An event that names no pair: no_item.
             {"type": "interrupted", "detail": {"reason": "previous_attempt_ended", "attempt": 1}},
+            *({"type": "interrupted", "detail": {"item_id": self.ids[n], "sample_index": 0,
+                                                 "reason": "sleep", "thinking_state": state}}
+              for n, state in enumerate(("absent", "empty", "present", "unterminated", "bogus"))),
             {"type": "sleep", "detail": {"slept_s": 30}}, {"type": "wake", "detail": {"slept_s": 30}},
             {"type": "pause", "detail": {"mode": "now"}}]
         for event in events:
@@ -120,15 +125,24 @@ class ReportCountTests(unittest.TestCase):
                           ("missing_final_answers", "infrastructure_failures", "interruptions",
                            "format_failures", "truncations", "fallback_extractions")},
                          {"missing_final_answers": 2, "infrastructure_failures": 1,
-                          "interruptions": 2, "format_failures": 1, "truncations": 2,
+                          "interruptions": 7, "format_failures": 1, "truncations": 2,
                           "fallback_extractions": 1})
-        # The exhausted pair is not a wrong answer: accuracy stays over scored pairs.
+        # P2: four states plus the unknown and no_item bins; an invalid state is unknown.
+        self.assertEqual(counts["interruption_thinking_states"],
+                         {"absent": 1, "empty": 1, "present": 1, "unterminated": 1,
+                          "unknown": 2, "no_item": 1})
+        self.assertEqual(sum(counts["interruption_thinking_states"].values()), counts["interruptions"])
+        # P9: the exhausted pair is not a wrong answer; accuracy stays over scored pairs,
+        # and planned, scored and exhausted pairs are explicit on an incomplete result.
         self.assertEqual(report["scorers"]["primary"]["accuracy"], 0.2)
         self.assertEqual(report["completeness"],
-                         {"observed_items": 5, "expected_items": 6, "complete": False})
+                         {"observed_items": 5, "expected_items": 6, "complete": False,
+                          "planned_pairs": 6, "scored_pairs": 5, "exhausted_pairs": 1})
         self.assertIsNone(report["subset_sha256"])
+        markdown = (directory / "report.md").read_text()
         self.assertIn("Missing final answers: 2; infrastructure failures (not scored): 1; "
-                      "interruptions: 2", (directory / "report.md").read_text())
+                      "interruptions: 7", markdown)
+        self.assertIn("INCOMPLETE: 5 of 6 planned pairs scored (1 exhausted", markdown)
 
     def test_subset_run_reports_its_own_item_set_and_binding(self) -> None:
         subset = {"subset_version": "1", "tier": "validation", "size": 2, "stratify": "subject",
@@ -139,7 +153,9 @@ class ReportCountTests(unittest.TestCase):
         self.assertEqual(self.report("subset"), 0)
         report = json.loads((directory / "report.json").read_text())
         self.assertEqual(report["completeness"],
-                         {"observed_items": 2, "expected_items": 2, "complete": True})
+                         {"observed_items": 2, "expected_items": 2, "complete": True,
+                          "planned_pairs": 2, "scored_pairs": 2, "exhausted_pairs": 0})
+        self.assertNotIn("INCOMPLETE", (directory / "report.md").read_text())
         self.assertEqual(report["subset_sha256"], _sha((directory / "subset.json").read_bytes()))
         self.assertIn("Subset SHA-256: " + report["subset_sha256"], (directory / "report.md").read_text())
         (directory / "report.json").unlink()
@@ -173,6 +189,28 @@ class ReportCountTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()):
             self.assertEqual(cli.main(["report", "--run", "published-legacy", "--compare-published", "0.5"]), 0)
         self.assertNotIn("not_whole_count", (directory / "report.json").read_text())
+
+    def test_not_whole_count_uses_planned_not_scored_pairs(self) -> None:
+        """P9: planned pairs decide the flag even when infrastructure failures cut scored pairs."""
+        for name, planned, flagged in (("planned-4-scored-3", 4, False),   # 2.0 planned; 1.5 scored
+                                       ("planned-3-scored-2", 3, True)):   # 1.5 planned; 1.0 scored
+            with self.subTest(name=name):
+                ids = [f"train/{name}-{n}" for n in range(planned)]
+                self.manifest["tiers"]["smoke"] = ids
+                self.manifest["items"] = [{"id": i, "role": "dev"} for i in ids]
+                rows = [_row(i, "ok", False, True) for i in ids[:-1]]
+                exhausted = {"item_id": ids[-1], "sample_index": 0, "reason": "stuck",
+                             "retry": None, "exhausted": True}
+                events = [{"type": "infra_retry", "at_utc": "2026-11-04T00:00:00+00:00",
+                           "awake_s": 0, "detail": exhausted}]
+                directory = self.write_run(name, self.current, rows, events=events)
+                with redirect_stdout(io.StringIO()), patch.object(sys, "stderr", io.StringIO()):
+                    self.assertEqual(cli.main(["report", "--run", name, "--compare-published", "0.5"]), 0)
+                report = json.loads((directory / "report.json").read_text())
+                self.assertEqual((report["completeness"]["planned_pairs"],
+                                  report["completeness"]["scored_pairs"]), (planned, planned - 1))
+                self.assertIs(report["comparison"]["not_whole_count"], flagged)
+                self.assertEqual(report["scorers"]["primary"]["accuracy"], 1.0)  # Over scored pairs.
 
     def test_v07_report_and_fixture_refusal_are_unchanged(self) -> None:
         rows = [_row(self.ids[0], "ok", False, True), _row(self.ids[1], "no_answer", False, False)]
