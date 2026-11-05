@@ -125,11 +125,25 @@ routes.
 |---|---|---|---|---|
 | `ffa07bd6edd6f2218b82f1bac28d32e1004866c74fbe1f7c5f2d84ed27dbd216` | `0b5851541d8982ed4ed2a01460e4a19ce665daf1` | convert, sanity, verify, smoke run, approval | pause after item; `pause --now` (it landed between items); `kill -9` of the worker mid-item with an orphaned server, then resume; approval wait, then resume | `a44e5abc688eac28371543118b6f67c970d0104436eb4ad9689551c59c2f4ca8` |
 | `e96245d940d6e3a7f9ed51cb4929b919900fdf0dbdb699645f3744c793be7023` | `63a25e5d10ae0b49b17e046b529153dfb81b1470` | verify, smoke run, approval | `kill -9` with a recorded run interruption; `pause --now` during an item, which discarded and later regenerated that one item; approval | `d75757c834962044a05627dfb520f5cdfcbc243e267f8756f3e2190ba6146473` |
+| `28b04b0f5c93067254d6548dc45d97dd6eb718adc72f8a08404144d6512df838` | `cf08b77e96fa6dfebcc802a8cd830e3f92191e74` | verify, smoke run, approval | synthetic Hugging Face credential sentinels in the runner's environment; approval wait, then resume | `fc61068ad1fe739a9190ee3ba5244bf195ca50cb7ec861a8f381882c1f26ab4c` |
 
-Both plans reached `completed` with valid attempt-log chains. Each run held
-all 16 smoke pairs exactly once. After each pause, wait and crash recovery, no
-model server or runner sleep assertion remained. Once the harness revision
+All three plans reached `completed` with valid attempt-log chains. Each run
+held all 16 smoke pairs exactly once. After each pause, wait and crash recovery,
+no model server or runner sleep assertion remained. Once the harness revision
 moved, the first authorization was refused with exit `2`.
+
+The third plan checked the credential correction against the pinned runtime.
+For `runner start` and `runner resume`, all four Hugging Face variables held
+synthetic sentinel values, never real credentials. During the run, `ps -E`
+showed those variables in the runner worker. It showed none in these children:
+
+- the `verify-runtime` and `verify-artifact` command children;
+- the three keyed `llama-server` processes;
+- the `--version` probe.
+
+No file in the run store contained a sentinel. The fixture's own template pin
+was verified against the file's bytes, and `report` refused the fixture run with
+exit `3`.
 
 [`tests/test_plan_runner.py`](../tests/test_plan_runner.py) adds deterministic
 fault injection with a fake keyed server and an injected clock. It covers:
@@ -137,10 +151,20 @@ fault injection with a fake keyed server and an injected clock. It covers:
 - kill and resume, including partial item and log writes;
 - pause and `pause --now` during items, commands and memory waits;
 - plan, authorization and stored-copy hash mismatches;
+- committed manifest and subset byte checks;
+- subset plan steps and direct `run --subset`, with their resume, refusal and
+  tampering cases;
+- credential-free command and server children;
 - retry accounting and the 5% stop rule;
-- a disk-floor exit;
+- a disk-floor exit and a short run-store write;
 - memory waits and stuck items;
 - sleep gaps on the injected clock.
+
+[`tests/test_credential_propagation.py`](../tests/test_credential_propagation.py)
+starts real child processes through each model-server, `--version` and
+converter-tool path, with synthetic sentinels.
+[`tests/test_report_counts.py`](../tests/test_report_counts.py) covers the §7
+counts and the unchanged v0.7 report.
 
 ## Limits
 
