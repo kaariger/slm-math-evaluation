@@ -66,6 +66,8 @@ its exit code. The `slm-eval run` command path is unchanged.
     no attempt or retry, and is resumed by hand. An exit code alone is no
     evidence. A convert exit `1`, for instance, may be a genuine tool failure
     rather than a lost network.
+  - Any other positive exit has an unknown cause and stops the plan, even after
+    an observed sleep. It is reported with the established failure exit, `1`.
   - Reaching the 5% rule also stops the plan; no command exit code applies.
 - **Infrastructure failures.** These are:
   - an HTTP 5xx response;

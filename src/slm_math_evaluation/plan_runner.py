@@ -810,10 +810,11 @@ class Worker:
     def _command(self, number: int, arguments: list[str], downloads: bool = False) -> None:
         """Run one ``slm-eval`` command child; only downloading steps keep HF credentials.
 
-        Exits 2, 3 and 4 stop the plan. Exit 1 or a signal stops it too, unless this
-        worker observed a sleep gap while the child ran: that is §13.5 evidence of an
-        interruption, which spends no budget and is resumed by hand. An exit code
-        alone, such as a convert exit 1, is no evidence of a lost network.
+        Exits 2, 3 and 4 stop the plan, and so does any other positive exit, whose cause
+        is unknown. Exit 1 or a signal stops it too, unless this worker observed a sleep
+        gap while the child ran: that is §13.5 evidence of an interruption, which spends
+        no budget and is resumed by hand. An exit code alone, such as a convert exit 1,
+        is no evidence of a lost network.
         """
         command = [sys.executable, "-m", "slm_math_evaluation.cli", *arguments]
         environment = None if downloads else runtime.credential_free_environment()
@@ -837,7 +838,10 @@ class Worker:
         code = process.returncode
         if code == 0:
             return
-        if code not in (2, 3, 4) and slept:
+        # Only exit 1 or a signal (a negative return code) may be an interruption, and
+        # only with the observed sleep. Exits 2, 3 and 4 and any other positive exit stop;
+        # an unknown exit is reported as the established failure exit, 1.
+        if (code == 1 or code < 0) and slept:
             raise _Interrupted({"reason": "sleep", "command": arguments[0], "exit_code": code})
         raise _Stopped(code if code in (1, 2, 3, 4) else 1,
                        f"{' '.join(arguments[:2])} exited {code}")

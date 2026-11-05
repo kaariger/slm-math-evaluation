@@ -923,21 +923,33 @@ class InterruptionAndResourceTests(RunnerHarnessCase):
                 self.assertEqual(self.h.generation_calls, [])
 
     def test_only_an_observed_sleep_makes_a_failed_command_an_interruption(self) -> None:
-        """P8: exit 1 or a signal is an interruption only with the worker's own sleep evidence."""
+        """P8: only exit 1 or a signal can be an interruption, and only with the worker's own
+        sleep evidence. Exits 2, 3 and 4 and any other positive exit stop for inspection."""
         h = self.h
-        for code, sleeps, state in ((1, False, "stopped"),      # a genuine convert failure
+        for code, sleeps, state in ((0, False, "completed"),    # success is unchanged
+                                    (0, True, "completed"),
+                                    (1, False, "stopped"),      # a genuine convert failure
                                     (1, True, "interrupted"),    # the machine slept meanwhile
                                     (-9, False, "stopped"),      # killed, cause unknown
                                     (-9, True, "interrupted"),
-                                    (3, True, "stopped"),        # 2, 3 and 4 always stop
-                                    (2, True, "stopped")):
+                                    (-15, True, "interrupted"),
+                                    (2, True, "stopped"),        # 2, 3 and 4 always stop
+                                    (3, True, "stopped"),
+                                    (4, True, "stopped"),
+                                    (5, False, "stopped"),       # unknown positive exits stop,
+                                    (5, True, "stopped"),        # even after a sleep
+                                    (127, False, "stopped"),
+                                    (127, True, "stopped"),
+                                    (255, True, "stopped")):
             with self.subTest(code=code, sleeps=sleeps):
                 self.tearDown_state()
+                h.generation_calls.clear()
                 h.command_codes = {"convert": (code, 3)}
                 h.command_hooks = {2: (lambda: h.clock.system_sleep(30)) if sleeps else None}
                 self.start(h.steps("convert", "smoke"), attempts=1)
                 status = h.status()
-                self.assertEqual((status["state"], status["completed_steps"]), (state, 0))
+                self.assertEqual((status["state"], status["completed_steps"]),
+                                 (state, 2 if state == "completed" else 0))
                 detail = status["last_event"]["detail"]
                 if state == "interrupted":
                     self.assertEqual(detail, {"reason": "sleep", "command": "model", "exit_code": code})
@@ -945,8 +957,11 @@ class InterruptionAndResourceTests(RunnerHarnessCase):
                     h.command_codes, h.command_hooks = {}, {}
                     self.resume()
                     self.assertEqual((h.status()["state"], h.status()["starts"]), ("completed", 1))
-                else:
-                    self.assertEqual(detail["exit_code"], code if code in (1, 2, 3) else 1)
+                elif state == "stopped":
+                    # An unknown exit is reported with the established failure exit, 1.
+                    self.assertEqual(detail["exit_code"], code if code in (1, 2, 3, 4) else 1)
+                    self.assertEqual(detail["reason"], f"model convert exited {code}")
+                    self.assertEqual(h.generation_calls, [])
                 self.assertFalse(self.h.sleep_lock.held)
 
     def tearDown_state(self) -> None:
