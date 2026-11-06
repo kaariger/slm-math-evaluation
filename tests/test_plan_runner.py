@@ -6,7 +6,7 @@ command children drive the real worker synchronously.
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -334,6 +334,12 @@ class Harness:
         if behavior == "crash":
             server.alive = False
             raise ConnectionResetError("server crashed")
+        if behavior == "sleep_crash":
+            self.clock.system_sleep(30)
+            server.alive = False
+            raise ConnectionResetError("server lost across sleep")
+        if behavior == "reset_alive":
+            raise ConnectionResetError("connection reset; server still running")
         if behavior == "error500":
             return 500, b"{}"
         if behavior == "sleep_fail":
@@ -1371,6 +1377,203 @@ class DirectInterruptionTests(RunnerHarnessCase):
         legacy_run = load_run(self.output.getvalue().split()[-1])
         self.assertEqual(legacy_run.metadata["status"], "interrupted")
         self.assertNotIn("events", legacy_run.metadata)
+
+
+class DirectRunCase(RunnerHarnessCase):
+    """A direct `slm-eval run` through the CLI, on the injected awake/continuous clock."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(plan_runner, "Clock", lambda: self.h.clock))
+        stack.enter_context(patch.object(runner, "CRASH_EXIT_WAIT_S", 0.05))
+        stack.enter_context(redirect_stderr(io.StringIO()))
+
+    def cli_run(self) -> tuple[int, str]:
+        code = cli.main(["run", "--protocol", str(self.h.repo / PROTOCOL),
+                         "--manifest", str(self.h.repo / plan_runner.MANIFEST), "--tier", "smoke"])
+        return code, self.output.getvalue().split()[-1]
+
+    def calls(self) -> list[str]:
+        return [item for item, _ in self.h.generation_calls]
+
+    @staticmethod
+    def kinds(run_id: str) -> list[str]:
+        return [event["type"] for event in load_run(run_id).metadata["events"]]
+
+    def assert_servers_stopped(self) -> None:
+        self.assertFalse([server.pid for server in self.h.servers if server.alive])
+
+
+class DirectRetryTests(DirectRunCase):
+    """§13.5 in a direct v0.8 run: an awake server crash is an infrastructure retry."""
+
+    def test_an_awake_crash_is_retried_and_the_same_invocation_completes(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "crash"
+        code, run_id = self.cli_run()
+        self.assertEqual(code, 0)
+        run = load_run(run_id)
+        self.assertEqual((run.metadata["status"], [a["status"] for a in run.metadata["attempts"]]),
+                         ("completed", ["completed"]))
+        pairs = [(row["item_id"], row["sample_index"]) for row in run.items]
+        self.assertEqual(pairs, [(item_id, 0) for item_id in h.ids])
+        self.assertEqual([row["infra_retries"] for row in run.items], [0, 1, 0])
+        events = run.metadata["events"]
+        self.assertEqual([e["type"] for e in events], ["infra_retry", "server_restart"])
+        self.assertEqual(events[0]["detail"], {"item_id": h.ids[1], "sample_index": 0,
+                                               "reason": "server_crash", "retry": 1})
+        # The crashed attempt is regenerated with the same seed; the completed one is scored.
+        self.assertEqual(h.generation_calls, [(h.ids[0], 0), (h.ids[1], 0), (h.ids[1], 0),
+                                              (h.ids[2], 0)])
+        self.assertEqual(len(h.servers), 2)
+        self.assertFalse(h.servers[0].alive)
+        self.assert_servers_stopped()
+        self.assertNotIn("infra_failures", run.metadata)
+
+    def test_retries_are_bounded_and_the_five_percent_rule_stops_the_run(self) -> None:
+        h = self.h
+        for attempt in range(3):
+            h.behaviors[(h.ids[1], attempt)] = "crash"
+        code, run_id = self.cli_run()
+        self.assertEqual(code, 1)
+        run = load_run(run_id)
+        self.assertEqual((run.metadata["status"], run.metadata["attempts"][-1]["status"]),
+                         ("stopped", "aborted"))
+        self.assertEqual(run.metadata["infra_failures"], [
+            {"item_id": h.ids[1], "sample_index": 0, "reason": "server_crash", "retries": 2}])
+        retries = [(e["detail"]["retry"], e["detail"].get("exhausted"))
+                   for e in run.metadata["events"] if e["type"] == "infra_retry"]
+        self.assertEqual(retries, [(1, None), (2, None), (None, True)])
+        self.assertEqual(self.kinds(run_id).count("server_restart"), 2)
+        self.assertEqual(self.calls(), [h.ids[0], h.ids[1], h.ids[1], h.ids[1]])
+        self.assertEqual([row["item_id"] for row in run.items], [h.ids[0]])
+        self.assert_servers_stopped()
+        # Resume continues after the accounted pair and never regenerates it.
+        self.assertEqual(runner.resume(run_id), run_id)
+        resumed = load_run(run_id)
+        self.assertEqual(resumed.metadata["status"], "completed")
+        self.assertEqual([row["item_id"] for row in resumed.items], [h.ids[0], h.ids[2]])
+        self.assertEqual(self.calls()[4:], [h.ids[2]])
+        self.assertEqual(resumed.metadata["infra_failures"], run.metadata["infra_failures"])
+
+    def test_a_crash_across_a_sleep_is_an_interruption_not_a_retry(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "sleep_crash"
+        code, run_id = self.cli_run()
+        self.assertEqual(code, 1)
+        run = load_run(run_id)
+        self.assertEqual(run.metadata["status"], "interrupted")
+        self.assertEqual(self.kinds(run_id), ["interrupted"])
+        self.assertEqual(run.metadata["events"][0]["detail"],
+                         {"reason": "error", "error": "ConnectionResetError", "attempt": 1,
+                          "item_id": h.ids[1], "sample_index": 0})
+        self.assertEqual(len(h.servers), 1)
+        self.assert_servers_stopped()
+        runner.resume(run_id)
+        resumed = load_run(run_id)
+        self.assertEqual(resumed.metadata["status"], "completed")
+        self.assertEqual([row["infra_retries"] for row in resumed.items], [0, 0, 0])
+        self.assertNotIn("infra_retry", self.kinds(run_id))
+
+    def test_only_a_crashed_server_is_retried(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "reset_alive"
+        code, run_id = self.cli_run()
+        self.assertEqual(code, 1)
+        self.assertEqual(load_run(run_id).metadata["status"], "interrupted")
+        self.assertNotIn("infra_retry", self.kinds(run_id))
+        self.assertEqual((len(h.servers), self.calls()), (1, h.ids[:2]))
+        self.assert_servers_stopped()
+
+    def test_a_restarted_server_with_other_settings_keeps_the_integrity_exit(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "crash"
+
+        def request(port, method, path, key, payload=None, **kwargs):
+            if path == "/props" and len(h.servers) > 1:
+                return 200, json.dumps({"default_generation_settings": {"n_ctx": 16384},
+                                        "total_slots": 1, "model_alias": "fixture-2",
+                                        "ui": False}).encode()
+            return h.request(port, method, path, key, payload, **kwargs)
+
+        with patch.object(runner.runtime, "request", request):
+            code, run_id = self.cli_run()
+        self.assertEqual(code, 2)
+        run = load_run(run_id)
+        self.assertEqual(run.metadata["status"], "interrupted")
+        self.assertEqual(self.kinds(run_id), ["infra_retry"])  # No restart was accepted.
+        self.assertEqual(self.calls(), h.ids[:2])
+        self.assertEqual([row["item_id"] for row in run.items], [h.ids[0]])
+        self.assert_servers_stopped()
+
+    def test_a_security_exit_is_not_charged_as_a_retry(self) -> None:
+        h = self.h
+        failure = runner.runtime.RuntimeErrorWithCode("server sampling differs: seed", 4)
+        with patch.object(runner.runtime, "confirm_sampling", side_effect=failure):
+            code, run_id = self.cli_run()
+        self.assertEqual(code, 4)
+        run = load_run(run_id)
+        self.assertEqual((run.metadata["status"], run.metadata["events"], run.items),
+                         ("interrupted", [], []))
+        self.assertEqual((len(h.servers), self.calls()), (1, h.ids[:1]))
+        self.assert_servers_stopped()
+
+    def test_a_signal_during_a_retry_is_an_interruption_and_the_retry_count_carries(self) -> None:
+        h = self.h
+        h.behaviors[(h.ids[1], 0)] = "crash"
+        h.behaviors[(h.ids[1], 1)] = "keyboard_interrupt"
+        with self.assertRaises(KeyboardInterrupt):
+            runner.start(h.repo / PROTOCOL, h.repo / plan_runner.MANIFEST, "smoke", 1, 0)
+        run_id = self.output.getvalue().split()[-1]
+        run = load_run(run_id)
+        self.assertEqual(run.metadata["status"], "interrupted")
+        self.assertEqual(self.kinds(run_id), ["infra_retry", "server_restart", "interrupted"])
+        self.assertEqual(run.metadata["events"][-1]["detail"],
+                         {"reason": "signal", "attempt": 1, "item_id": h.ids[1], "sample_index": 0})
+        self.assert_servers_stopped()
+        runner.resume(run_id)
+        resumed = load_run(run_id)
+        self.assertEqual(resumed.metadata["status"], "completed")
+        self.assertEqual([row["infra_retries"] for row in resumed.items], [0, 1, 0])
+        self.assertEqual(self.kinds(run_id).count("infra_retry"), 1)
+
+    def test_a_legacy_direct_run_is_unchanged_by_a_crash(self) -> None:
+        h = self.h
+        legacy = json.loads((ROOT / "configs/protocols/protocol.yaml").read_text())
+        h.write("configs/protocols/legacy.yaml", json.dumps(legacy).encode())
+        h.behaviors[(h.ids[1], 0)] = "crash"
+        with patch.object(runner.runtime, "sha256_file", lambda _path: legacy["model"]["artifact"]["sha256"]), \
+                patch.object(runner, "_effective_settings", return_value={}), \
+                self.assertRaises(ConnectionResetError):
+            runner.start(h.repo / "configs/protocols/legacy.yaml", h.repo / plan_runner.MANIFEST,
+                         "smoke", 1, 0)
+        run = load_run(self.output.getvalue().split()[-1])
+        self.assertEqual(run.metadata["status"], "interrupted")
+        self.assertNotIn("events", run.metadata)
+        self.assertNotIn("infra_failures", run.metadata)
+        self.assertEqual((len(h.servers), self.calls()), (1, h.ids[:2]))
+
+
+class DirectExhaustionTests(DirectRunCase):
+    items = 21
+
+    def test_an_exhausted_pair_below_five_percent_is_accounted_and_the_run_completes(self) -> None:
+        h = self.h
+        for attempt in range(3):
+            h.behaviors[(h.ids[2], attempt)] = "crash"
+        code, run_id = self.cli_run()
+        self.assertEqual(code, 0)
+        run = load_run(run_id)
+        self.assertEqual(run.metadata["status"], "completed")
+        self.assertEqual([row["item_id"] for row in run.items], h.ids[:2] + h.ids[3:])
+        self.assertEqual(run.metadata["infra_failures"], [
+            {"item_id": h.ids[2], "sample_index": 0, "reason": "server_crash", "retries": 2}])
+        self.assertEqual(self.calls().count(h.ids[2]), 3)
+        self.assertEqual(self.kinds(run_id).count("server_restart"), 3)
+        self.assertEqual(len(h.servers), 4)
+        self.assert_servers_stopped()
 
 
 class CredentialChildTests(RunnerHarnessCase):

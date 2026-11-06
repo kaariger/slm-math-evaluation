@@ -144,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     except runtime.RuntimeErrorWithCode as error:
         print(error, file=sys.stderr)
         return error.code
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, runner.RunStopped) as error:
+        # RunStopped: a direct run met the §13.5 stop rule; its run.json says `stopped`.
         print(error, file=sys.stderr)
         return 1
 

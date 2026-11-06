@@ -29,6 +29,8 @@ from .run_store import StoredRun, load_run
 ADAPTER = {"id": "llama-cpp-chat-completions", "version": "1.0.0"}
 PROVENANCE_LABELS = {"source-known-paper", "source-known-blog", "vendor-filled",
                      "vendor-template", "inferred", "local-choice"}
+# A killed server's dropped connection can be seen before its exit can be observed.
+CRASH_EXIT_WAIT_S = 5.0
 
 
 def _utc() -> str:
@@ -310,8 +312,12 @@ def resume(run_id: str, control: Any = None) -> str:
     if not existing <= required:
         raise DataError("stored item/sample pair outside run tier", 2)
     remaining = required - existing
-    if control is not None:
-        remaining = {pair for pair in remaining if not control.exhausted(*pair, run.metadata)}
+    if control is not None or run.metadata.get("infra_failures"):
+        # Pairs that exhausted their retries are accounted, never regenerated (§13.5).
+        if control is not None:
+            remaining = {pair for pair in remaining if not control.exhausted(*pair, run.metadata)}
+        else:
+            remaining -= _exhausted_pairs(run.metadata)
         if not remaining:
             # The last pair was recorded before the crash that preceded this resume.
             run.metadata["status"] = "completed"
@@ -334,8 +340,26 @@ def resume(run_id: str, control: Any = None) -> str:
     return run_id
 
 
+def _event(kind: str, detail: dict[str, Any], awake_s: float) -> dict[str, Any]:
+    return {"type": kind, "at_utc": _utc(), "awake_s": round(awake_s, 3), "detail": detail}
+
+
 def _interrupted_event(detail: dict[str, Any], awake_s: float) -> dict[str, Any]:
-    return {"type": "interrupted", "at_utc": _utc(), "awake_s": round(awake_s, 3), "detail": detail}
+    return _event("interrupted", detail, awake_s)
+
+
+def _exhausted_pairs(metadata: dict[str, Any]) -> set[tuple[str, int]]:
+    return {(entry["item_id"], entry["sample_index"])
+            for entry in metadata.get("infra_failures", [])}
+
+
+def _retries_used(metadata: dict[str, Any], item_id: str, sample: int) -> int:
+    """Infrastructure retries already recorded for a pair, in any attempt (§13.5)."""
+    return sum(1 for event in metadata.get("events", [])
+               if event["type"] == "infra_retry"
+               and event["detail"].get("item_id") == item_id
+               and event["detail"].get("sample_index") == sample
+               and event["detail"].get("retry") is not None)
 
 
 def interruption_recorded(metadata: dict[str, Any], attempt: Any) -> bool:
@@ -522,8 +546,13 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
               manifest: dict[str, Any], ids: list[str], existing: set[tuple[str, int]],
               control: Any = None) -> None:
     """Generate missing pairs. ``control`` is the plan runner's hook (§13); None is `run`."""
+    from . import plan_runner  # Imported here: plan_runner imports this module.
     adapter = model_adapters.from_protocol(protocol)
     new_protocol = protocol.get("model", {}).get("adapter") is not None
+    # A direct v0.8 run retries an awake server crash (§13.5) on the runner's clocks.
+    direct_retry = control is None and new_protocol
+    clock = plan_runner.Clock() if direct_retry else None
+    exhausted = _exhausted_pairs(metadata) if direct_retry else set()
     server_path, model = runtime.pinned_paths(protocol)
     metadata["runtime_files_verified"] = {
         "archive_sha256": runtime.ARCHIVE_SHA256,
@@ -581,15 +610,34 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         metadata["generation_timeout_seconds"] = timeout
         write_json(directory / "run.json", metadata)
 
+        def direct_event(kind: str, detail: dict[str, Any]) -> None:
+            metadata["events"].append(_event(kind, detail, time.monotonic() - awake_start))
+            write_json(directory / "run.json", metadata)
+
         def restart() -> None:
             session.stop()
-            control.server_stopped(session)
+            if control is not None:
+                control.server_stopped(session)
             session.prepare()
             session.launch()
-            control.server_started(session)
+            if control is not None:
+                control.server_started(session)
             session.wait_healthy()
             _effective_settings(protocol, session.port, session.key, session.arguments)
-            control.event("server_restart", {"port": session.port})
+            if control is not None:
+                control.event("server_restart", {"port": session.port})
+            else:
+                direct_event("server_restart", {"port": session.port})
+
+        def crashed_awake(marks: tuple[float, float]) -> bool:
+            """Whether a failed direct attempt was a server crash while awake (§13.5)."""
+            deadline = time.monotonic() + CRASH_EXIT_WAIT_S
+            while session.alive() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if session.alive():
+                return False
+            slept = (clock.continuous() - marks[1]) - (clock.awake() - marks[0])
+            return slept <= plan_runner.SLEEP_GAP_S
 
         total = len(ids) * metadata["k"]
         with (directory / "items.jsonl").open("a", encoding="utf-8") as stream:
@@ -600,6 +648,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                     if (item_id, sample) in existing:
                         continue
                     if control is not None and control.exhausted(item_id, sample):
+                        continue
+                    if (item_id, sample) in exhausted:
                         continue
                     observed.update(pair=(item_id, sample), raw=None)
                     seed = metadata["seeds"][sample]
@@ -635,9 +685,43 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
                         return rendered, body, confirmed
 
                     retries = 0
-                    if control is None:
+                    if control is None and not direct_retry:
                         started = time.monotonic()
                         rendered_prompt, body, confirmed = generate_once()
+                        timing_ms = awake_ms = round((time.monotonic() - started) * 1000)
+                    elif control is None:
+                        # Only an awake crash of the run's own server is retried; any other
+                        # failure, including one across a sleep, ends the run as before.
+                        retries = _retries_used(metadata, item_id, sample)
+                        while True:
+                            started = time.monotonic()
+                            marks = (clock.awake(), clock.continuous())
+                            try:
+                                rendered_prompt, body, confirmed = generate_once()
+                                break
+                            except (OSError, http.client.HTTPException):
+                                if not crashed_awake(marks):
+                                    raise
+                            failure = {"item_id": item_id, "sample_index": sample,
+                                       "reason": "server_crash"}
+                            if retries >= plan_runner.INFRA_RETRIES:
+                                metadata.setdefault("infra_failures", []).append(
+                                    {**failure, "retries": retries})
+                                direct_event("infra_retry", {**failure, "retry": None,
+                                                             "exhausted": True})
+                                if (len(metadata["infra_failures"]) * plan_runner.STOP_DENOMINATOR
+                                        >= total):
+                                    raise RunStopped(
+                                        "items that exhausted their retries reached 5% of the run")
+                                rendered_prompt = None
+                                break
+                            retries += 1
+                            direct_event("infra_retry", {**failure, "retry": retries})
+                            restart()
+                        if rendered_prompt is None:
+                            observed.update(pair=None, raw=None)  # Accounted, not in progress.
+                            restart()
+                            continue
                         timing_ms = awake_ms = round((time.monotonic() - started) * 1000)
                     else:
                         control.before_item(item_id, sample)
@@ -710,8 +794,8 @@ def _generate(directory: Path, metadata: dict[str, Any], protocol: dict[str, Any
         metadata["status"] = "paused"
         attempt["status"] = "paused"
         raise
-    except (RunStopped, DataError, runtime.RuntimeErrorWithCode):
-        stopped = control is not None
+    except (RunStopped, DataError, runtime.RuntimeErrorWithCode) as error:
+        stopped = control is not None or isinstance(error, RunStopped)
         metadata["status"] = "stopped" if stopped else "interrupted"
         attempt["status"] = "aborted" if stopped else "interrupted"
         raise
