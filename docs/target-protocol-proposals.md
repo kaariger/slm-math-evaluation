@@ -134,14 +134,21 @@ and their prompt hashes.
 
 **Sanity route.** A fixed-text perplexity comparison against a pinned artifact
 from `ggml-org/gemma-4-12B-it-GGUF`, plus a smoke run. The reference is
-required, so `null` is not an alternative. Several inputs to the later proof
-are still open:
+required, so `null` is not an alternative. The maintainer has since approved
+the sanity metadata. The [Gemma spec](../configs/models/gemma-4-12b.yaml)
+holds the exact values, and the
+[spec source evidence](model-spec-source-evidence.md#sanity-inputs) records
+their provenance:
 
-- the reference's exact revision, file and SHA-256;
-- the fixed text and its hash;
-- the ratio limit;
-- approval to download the reference.
+- the BF16 reference `gemma-4-12B-it-BF16.gguf` at revision `790d826c…`,
+  whose publisher declares the approved source revision as its primary source;
+- the existing fixed non-math text's SHA-256 (`6a5f0f03…`); the text stays
+  outside the repository;
+- a ratio limit of 1.10, a local sanity guard rather than a publisher threshold.
 
+These pins authorize nothing. Downloading the reference, the conversion, the
+sanity comparison, the reference's byte verification and tokenizer and runtime
+compatibility, and memory feasibility all still need later approval and proof.
 Nothing is downloaded now. The smoke run belongs to the later runner plan.
 
 ## Comparisons and framing
@@ -166,8 +173,10 @@ These await measurement, pinning or approval:
   prompt-length and memory measurement;
 - the artifact and conversion-record hashes, produced by the pinned
   conversion;
-- the exact Gemma sanity reference pin, its fixed text, its ratio limit and
-  approval to download it;
+- approval to download the pinned Gemma sanity reference, and proof of its
+  bytes, tokenizer and runtime compatibility and memory feasibility (its pin,
+  fixed-text hash and ratio limit are now in the
+  [Gemma spec](../configs/models/gemma-4-12b.yaml));
 - the Phi published-figure citation, its mapping and sample-count provenance;
 - the exact proof and tier plan, including the smoke runs;
 

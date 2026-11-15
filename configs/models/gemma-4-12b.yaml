@@ -1,0 +1,34 @@
+spec_version: "1"
+name: gemma-4-12b
+role: target
+source:
+  repo: google/gemma-4-12B-it
+  commit: 43c9d014b231474fa7212dbb48a762566c2b255d
+  files:
+    - {path: chat_template.jinja, sha256: ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4}
+    - {path: config.json, sha256: 478c46e8d2c52d5c2d85bf67e3b3e8c90e7c9d91086cee27e3c267907e936bd9}
+    - {path: generation_config.json, sha256: a8349d9bd64cc5841297fcb5002f0fdc4749c473c8f1b10ea337f9ce4ee7014e}
+    - {path: model.safetensors, sha256: 5a84cb313260ac447237b890387116dfa8682e49a6b44bc585ae8353abbff18d}
+    - {path: processor_config.json, sha256: 6b938e76555b3e9946890770e1abcd442a4718f34041a58e8139dc8ad34545c9}
+    - {path: tokenizer.json, sha256: 9788bdb6a021b3170357cd3587b5d622b1177561ad3c5bf43d73728fd71aeacb}
+    - {path: tokenizer_config.json, sha256: a62f4e85a47c0c136edaaa3a4f591fd6783717299a9def47e5ad03a49f6a5eb9}
+architecture: Gemma4UnifiedForConditionalGeneration
+text_only: true
+template: {inserts_system_message: true, thinking_control: template_arg}
+conversion:
+  tool:
+    release: b10412
+    script_sha256: e38975e1c68d98ac1664dfd530616eb35c72294382a4dd873d4746b23f27779f
+    python_lock_sha256: 068e45ece468b5166f84d297791b0596b97be24710a3e26326aba9b76ed6a103
+  intermediate: bf16
+  quantization: Q4_K_M
+  calibration: none
+expected_sizes_gb: {source: 28, intermediate: 28, output: 10}
+sanity:
+  reference:
+    repo: ggml-org/gemma-4-12B-it-GGUF
+    commit: 790d826c6ec7dc8aa0ab23af33e5b8313140a231
+    file: gemma-4-12B-it-BF16.gguf
+    sha256: 7ddcd5e95ca59f07c2f76fb6c233cf29bae66bced50b36827d6391cb26fe3e3c
+  perplexity_text_sha256: 6a5f0f0322d941de9d5e0f78be9120b2f44f892328ad2a693b8034bae29b0ec3
+  max_perplexity_ratio: 1.1

@@ -84,14 +84,21 @@ value awaits measurement.
 
 **Sanity route.** A fixed-text perplexity comparison against a pinned artifact
 from `ggml-org/gemma-4-12B-it-GGUF`, plus a smoke run. The reference is
-required, so `sanity.reference` is not `null`. Several inputs to the later
-proof are still open:
+required, so `sanity.reference` is not `null`. The maintainer has since
+approved the sanity metadata. The [Gemma spec](../../configs/models/gemma-4-12b.yaml)
+holds the exact values, and the
+[spec source evidence](../model-spec-source-evidence.md#sanity-inputs) records
+their provenance:
 
-- the reference's exact revision, file and SHA-256;
-- the fixed text and its hash;
-- the ratio limit;
-- approval to download the reference.
+- the BF16 reference `gemma-4-12B-it-BF16.gguf` at revision `790d826c…`,
+  whose publisher declares the approved source revision as its primary source;
+- the existing fixed non-math text's SHA-256 (`6a5f0f03…`); the text stays
+  outside the repository;
+- a ratio limit of 1.10, a local sanity guard rather than a publisher threshold.
 
+These pins authorize nothing. Downloading the reference, the conversion, the
+sanity comparison, the reference's byte verification and tokenizer and runtime
+compatibility, and memory feasibility all still need later approval and proof.
 Nothing is downloaded now. The smoke run belongs to the later runner plan.
 
 ## Evidence so far, and its limits
@@ -131,9 +138,10 @@ MATH-500 figure.
    measurement.
 2. The artifact and conversion-record hashes, produced by the pinned
    conversion.
-3. The sanity reference pin from `ggml-org/gemma-4-12B-it-GGUF` (revision,
-   file and SHA-256), its fixed text, its ratio limit and approval to download
-   it.
+3. Approval to download the pinned sanity reference, and proof of its bytes,
+   tokenizer and runtime compatibility and memory feasibility. Its pin,
+   fixed-text hash and ratio limit are now in the
+   [Gemma spec](../../configs/models/gemma-4-12b.yaml).
 4. The exact proof and tier plan, including the smoke run and the
    thinking-off capability check. Smoke precedes any other tier (§12.4).
 

@@ -1,0 +1,36 @@
+spec_version: "1"
+name: phi-4-reasoning-plus
+role: target
+source:
+  repo: microsoft/Phi-4-reasoning-plus
+  commit: 69baf8528e1bcf05f475034d9e5dd32875ed125f
+  files:
+    - {path: config.json, sha256: 0a13d8a96ac97a77871e10739669fd75cb1d7e2e403d5cd6ee0819233a30eff8}
+    - {path: generation_config.json, sha256: 3c0aeb1af3855927b0cc6238651fb56b7727e2fa580528ab28ae31289da12fd6}
+    - {path: model-00001-of-00006.safetensors, sha256: b09018075f60c9973c2bc200fc9b3c8bee57a18f934b50991d39803102bc8d5e}
+    - {path: model-00002-of-00006.safetensors, sha256: 6a9bd9a40dd1a6b4c0763b02ce06ad9ac40d0859cf139996bb5d284f01f7b762}
+    - {path: model-00003-of-00006.safetensors, sha256: 8007f9bc69a70ccc3b28e9b559e65ca9fcb80df36d1d25c0e17649cb73c51270}
+    - {path: model-00004-of-00006.safetensors, sha256: fc08d90365b09dcb4b354a5edfe587cc337309e3148231a7b2b745c8c9b599a7}
+    - {path: model-00005-of-00006.safetensors, sha256: b63d22c644e379be5c300bde6b9701496750589b8555d36285110465cdc0ea7b}
+    - {path: model-00006-of-00006.safetensors, sha256: 071cc0603e240c02a17c5d2f5c7ce8d28f658f30f99e95cc68039023e452ff7b}
+    - {path: model.safetensors.index.json, sha256: 51f3004b8d5b478473f26eb8cb5ac7e5aacc39938ad365f0c8933b18dfa9a158}
+    - {path: special_tokens_map.json, sha256: 9344c191cb4f9d47f617bba671e7ffff5d60fe37e49ae7a8d275dcae1d40885f}
+    - {path: tokenizer.json, sha256: b28a32dcbbb2779573aa8e345457e7b10f470ccfd262d01672c2469698cbd4f7}
+    - {path: tokenizer_config.json, sha256: 6d3efcfa6a8a438e089633132f3bb4ba3d192a5a912f5e908fcce56b1de9d4ce}
+    - {path: vocab.json, sha256: 23b80b3c4932a7733eb91487cb2fdbc56c5bd199a459128f538095a36dad5287}
+architecture: Phi3ForCausalLM
+text_only: true
+template: {inserts_system_message: true, thinking_control: always}
+conversion:
+  tool:
+    release: b10412
+    script_sha256: e38975e1c68d98ac1664dfd530616eb35c72294382a4dd873d4746b23f27779f
+    python_lock_sha256: 068e45ece468b5166f84d297791b0596b97be24710a3e26326aba9b76ed6a103
+  intermediate: bf16
+  quantization: Q4_K_M
+  calibration: none
+expected_sizes_gb: {source: 32, intermediate: 32, output: 12}
+sanity:
+  reference: null
+  perplexity_text_sha256: 6a5f0f0322d941de9d5e0f78be9120b2f44f892328ad2a693b8034bae29b0ec3
+  max_perplexity_ratio: 1.1
