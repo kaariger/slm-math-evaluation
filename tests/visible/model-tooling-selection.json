@@ -1,0 +1,816 @@
+{
+  "base_commit": "ae2c4dc50873ba01de8143f8ebf2427f6699385e",
+  "description": "Maintainer-ruled explicit collection inventory; no execution authority or test-pass claim.",
+  "expected_collection_cases": {
+    "harness": 138,
+    "proof": 7
+  },
+  "harness": [
+    {
+      "id": "VS-AD-03",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_ad_03_v07_form_runs_rescore_and_report_unchanged"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-AD-04",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_ad_04_rescore_refuses_an_adapter_the_contract_does_not_name"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-AD-05",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_ad_05_verify_artifact_rejects_a_mode_the_adapter_does_not_allow"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-AD-06",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_ad_06_run_rejects_a_mode_the_adapter_does_not_allow"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-AD-07",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_ad_07_committed_protocols_satisfy_the_v08_rules"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-SP-01",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_sp_01_split_reasoning_golden_fixtures"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-SP-02",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_sp_02_extract_golden_fixtures"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-SP-03",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_adapters.py::test_vs_sp_03_absent_final_answer_extracts_nothing"
+      ],
+      "source_sha256": "202bf39beb2103692b879ea3c9f4fe59fb1e05e636c4ae8485ec6928616b8d11"
+    },
+    {
+      "id": "VS-SB-01",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_01_subset_schema_and_written_path"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-02",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_02_subset_is_byte_identical_across_runs"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-03",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_03_allocation_by_largest_remainder_ties_by_name"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-04",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_04_single_subject_draw_rebuilds_independently"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-05",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_05_size_larger_than_the_tier_exits_3"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-06",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_06_pinned_split_manifest_is_byte_identical"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-07",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_07_committed_subset_follows_the_rules"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-SB-08",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_subset.py::test_vs_sb_08_rebuilding_the_committed_subset_is_byte_identical"
+      ],
+      "source_sha256": "563129c878920c6136b475cc9153e7694bedc6274c659cfd25f687398271c2fa"
+    },
+    {
+      "id": "VS-CV-01",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_01_floor_breach_in_preflight_exits_3_and_writes_nothing"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-CV-02",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_02_floor_breach_with_the_tool_installed"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-CV-03",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_03_download_credentials_are_never_printed_or_written"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-CV-04",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_04_sanity_without_a_converted_file_exits_3"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-CV-05",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_05_committed_specs_follow_the_spec_schema"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-CV-06",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_converter.py::test_vs_cv_06_target_specs_declare_their_familys_thinking_control"
+      ],
+      "source_sha256": "6f3f78c6966725ef02481a5245cf1fec513198bec95bfd2a85bcef451dae9328"
+    },
+    {
+      "id": "VS-RF-01",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_report_v08.py::test_vs_rf_01_a_fixture_run_cannot_be_reported"
+      ],
+      "source_sha256": "cc392279bdccbe83464e34c26069724e4b1410da3d2595b357850b9fb0a554a8"
+    },
+    {
+      "id": "VS-RF-02",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_report_v08.py::test_vs_rf_02_a_published_value_that_is_not_a_whole_count_is_flagged"
+      ],
+      "source_sha256": "cc392279bdccbe83464e34c26069724e4b1410da3d2595b357850b9fb0a554a8"
+    },
+    {
+      "id": "VS-RF-03",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_report_v08.py::test_vs_rf_03_a_whole_count_is_not_flagged"
+      ],
+      "source_sha256": "cc392279bdccbe83464e34c26069724e4b1410da3d2595b357850b9fb0a554a8"
+    },
+    {
+      "id": "VS-SM-04",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_seam.py::test_vs_sm_04_no_credential_in_committed_files"
+      ],
+      "source_sha256": "54e727a14a33aacfcfc336f53bffcf7b4dc6c9aafa5039405e9f72c5a2a94ac6"
+    },
+    {
+      "id": "VS-SM-05",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_seam.py::test_vs_sm_05_no_run_store_runner_state_or_model_files_committed"
+      ],
+      "source_sha256": "54e727a14a33aacfcfc336f53bffcf7b4dc6c9aafa5039405e9f72c5a2a94ac6"
+    },
+    {
+      "id": "VS-CU-01",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_cli_v08.py::test_vs_cu_01_usage_errors_exit_3"
+      ],
+      "source_sha256": "dd8a2e244eca1d5c0eacf26993d33b59848c157ed647937346002f37d14f5723"
+    },
+    {
+      "id": "VS-CU-02",
+      "nodes": [
+        "tests/visible/batch-08/test_vs_cli_v08.py::test_vs_cu_02_missing_input_files_exit_3"
+      ],
+      "source_sha256": "dd8a2e244eca1d5c0eacf26993d33b59848c157ed647937346002f37d14f5723"
+    },
+    {
+      "id": "VS-CL-02",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_clarified.py::test_vs_cl_02_committed_subset_equals_the_independent_rebuild"
+      ],
+      "source_sha256": "57d9b5a08ed9182997280e7040eed19db7197656a8f07f6438582ba0f3e97448"
+    },
+    {
+      "id": "VS-CL-06",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_clarified.py::test_vs_cl_06_qwen3_split_of_a_stray_close_is_absent"
+      ],
+      "source_sha256": "57d9b5a08ed9182997280e7040eed19db7197656a8f07f6438582ba0f3e97448"
+    },
+    {
+      "id": "VS-RC-10",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_10_no_credential_in_evidence_logs_or_records"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-AD-08",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_adapter_rescore.py::test_vs_ad_08_rescore_reproduces_each_adapters_golden_split"
+      ],
+      "source_sha256": "85eab85f1dfcc2cc4d8a71d90fff23108da5eacb5856ba0d581f363d87069595"
+    },
+    {
+      "id": "VS-AD-09",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_adapter_rescore.py::test_vs_ad_09_an_opening_after_the_last_close_empties_final"
+      ],
+      "source_sha256": "85eab85f1dfcc2cc4d8a71d90fff23108da5eacb5856ba0d581f363d87069595"
+    },
+    {
+      "id": "VS-FX-09",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_fixture_faults.py::test_vs_fx_09_mode_rejection_against_an_allowed_control"
+      ],
+      "source_sha256": "bf644d1e79b45db8c7329e7afd5a26e08b63eb3ccb07740549b5a9c62a75b2c2"
+    },
+    {
+      "id": "VS-FX-10",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_fixture_faults.py::test_vs_fx_10_a_fixture_run_records_the_values_it_sent_and_cannot_be_reported"
+      ],
+      "source_sha256": "bf644d1e79b45db8c7329e7afd5a26e08b63eb3ccb07740549b5a9c62a75b2c2"
+    },
+    {
+      "id": "VS-FX-12",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_fixture_faults.py::test_vs_fx_12_resume_refuses_a_different_model_file"
+      ],
+      "source_sha256": "bf644d1e79b45db8c7329e7afd5a26e08b63eb3ccb07740549b5a9c62a75b2c2"
+    },
+    {
+      "id": "VS-FX-13",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_fixture_faults.py::test_vs_fx_13_subset_mismatch_exits_2_against_a_valid_control"
+      ],
+      "source_sha256": "bf644d1e79b45db8c7329e7afd5a26e08b63eb3ccb07740549b5a9c62a75b2c2"
+    },
+    {
+      "id": "VS-FX-16",
+      "nodes": [
+        "tests/visible/batch-10/test_vs_fixture_faults.py::test_vs_fx_16_a_server_crash_is_retried_and_accounted"
+      ],
+      "source_sha256": "bf644d1e79b45db8c7329e7afd5a26e08b63eb3ccb07740549b5a9c62a75b2c2"
+    },
+    {
+      "id": "VS-RN-12",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_12_start_prints_the_plan_hash_and_reaches_the_approval_wait"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-13",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_13_stored_copies_and_hash_chained_log"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-14",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_14_resume_continues_past_each_approval_to_completion"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-15",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_15_status_prints_state_and_head_hash_and_writes_nothing"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-16",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_16_plan_hash_mismatch_exits_2_and_starts_nothing"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-17",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_17_harness_revision_mismatch_exits_2"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-18",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_18_a_pinned_hash_missing_from_bindings_exits_2"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-19",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_19_resume_refuses_a_tampered_stored_copy"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-20",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_20_resume_uses_the_stored_copies_when_the_originals_are_gone"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-21",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_21_runner_commands_without_a_plan_exit_3"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-RN-22",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_runner_control.py::test_vs_rn_22_a_step_type_outside_the_plan_schema_never_runs"
+      ],
+      "source_sha256": "35d1929b07ddadf7b960787a38a8fe0a2e74115321bfb3ed824b83100889af42"
+    },
+    {
+      "id": "VS-CL-07",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_clarified_replacement.py::test_vs_cl_07_subset_ids_equal_the_independent_rebuild"
+      ],
+      "source_sha256": "1b254c50438fe3526261b1282c770d0dafee6044edf2b8553670ccc835200172"
+    },
+    {
+      "id": "VS-CL-08",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_clarified_replacement.py::test_vs_cl_08_runner_log_uses_the_exact_hash_rule"
+      ],
+      "source_sha256": "1b254c50438fe3526261b1282c770d0dafee6044edf2b8553670ccc835200172"
+    },
+    {
+      "id": "VS-CL-09",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_clarified_replacement.py::test_vs_cl_09_status_prints_the_head_hash_of_a_given_log"
+      ],
+      "source_sha256": "1b254c50438fe3526261b1282c770d0dafee6044edf2b8553670ccc835200172"
+    },
+    {
+      "id": "VS-CL-10",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_clarified_replacement.py::test_vs_cl_10_qwen3_stray_close_keeps_the_whole_output_as_final"
+      ],
+      "source_sha256": "1b254c50438fe3526261b1282c770d0dafee6044edf2b8553670ccc835200172"
+    },
+    {
+      "id": "VS-RC-13",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_rescore_retained.py::test_vs_rc_13_retained_qwen3_runs_rescore_on_verified_copies"
+      ],
+      "source_sha256": "aaa1eddbd282a87a2ef60f1c091804fa22a37d968bdd6695565827a7facdbc6c"
+    },
+    {
+      "id": "VS-FX-17",
+      "nodes": [
+        "tests/visible/batch-11/test_vs_fixture_recovery.py::test_vs_fx_17_a_crashed_run_keeps_its_durable_prefix_and_resumes"
+      ],
+      "source_sha256": "f67f6d8053521b04268f3b3222b9d37514d3d8d326056a91a6673dbd11143def"
+    },
+    {
+      "id": "VS-FX-18",
+      "nodes": [
+        "tests/visible/batch-12/test_vs_runner_faults_owned.py::test_vs_fx_18_runner_pause_stops_the_proven_server_and_resume_completes"
+      ],
+      "source_sha256": "a3b41d0405c58646ecd5defbae3b882e3a2b9750b6237374235b6176b8c99f24"
+    },
+    {
+      "id": "VS-FX-19",
+      "nodes": [
+        "tests/visible/batch-12/test_vs_runner_faults_owned.py::test_vs_fx_19_a_crashed_runner_recovers_only_on_resume"
+      ],
+      "source_sha256": "a3b41d0405c58646ecd5defbae3b882e3a2b9750b6237374235b6176b8c99f24"
+    },
+    {
+      "id": "VS-LR-01",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_01_verify_runtime_record_location"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-04",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_04_model_listing_shows_alias_and_no_path"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-05",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_05_loopback_only_on_an_ephemeral_port"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-06",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_06_key_is_never_written"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-07",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_07_server_terminated_on_normal_exit"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-08",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_08_server_terminated_on_interrupt"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-11",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_11_verify_artifact_passes"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-12",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_12_verify_artifact_hash_mismatch_exits_2"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-13",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_13_verify_runtime_passes_and_records_checks"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-14",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_14_loopback_only_on_ephemeral_port"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-15",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_15_api_key_never_written_or_printed"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-16",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_16_server_cleaned_up_on_normal_exit"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-17",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_17_server_cleaned_up_on_interrupt"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-18",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_18_run_evidence_is_complete"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-19",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_19_real_run_rescores_exactly_and_reports_aggregates"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-20",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_20_resume_generates_only_missing_pairs"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-21",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_21_to_24_resume_refused_when_identity_differs[VS-LR-21-protocol]"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-22",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_21_to_24_resume_refused_when_identity_differs[VS-LR-22-manifest]"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-23",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_21_to_24_resume_refused_when_identity_differs[VS-LR-23-model]"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-24",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_21_to_24_resume_refused_when_identity_differs[VS-LR-24-runtime]"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-25",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_25_used_tier_is_immutable"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-26",
+      "nodes": [
+        "tests/visible/batch-13/test_vs_legacy_runtime_owned.py::test_vs_lr_26_run_with_mismatched_manifest_source_exits_2"
+      ],
+      "source_sha256": "70fd519676eb6daf804ae569fc38fe31336b3849840b86226b1da435cf51057f"
+    },
+    {
+      "id": "VS-LR-28",
+      "nodes": [
+        "tests/visible/batch-14/test_vs_legacy_fixed_not_found.py::test_vs_lr_28_key_required_except_the_exemption"
+      ],
+      "source_sha256": "71af25be6ce2a2517385f7f6aa07d0bd2cbea5d703cc53d55829ee4b1bf97027"
+    },
+    {
+      "id": "VS-LR-29",
+      "nodes": [
+        "tests/visible/batch-14/test_vs_legacy_fixed_not_found.py::test_vs_lr_29_preflight_without_key_carries_no_body"
+      ],
+      "source_sha256": "71af25be6ce2a2517385f7f6aa07d0bd2cbea5d703cc53d55829ee4b1bf97027"
+    },
+    {
+      "id": "VS-LR-31",
+      "nodes": [
+        "tests/visible/batch-15/test_vs_legacy_record_classification.py::test_vs_lr_31_verification_record_contents"
+      ],
+      "source_sha256": "51aa6b54bc300a0406d85720257a85fd2e90e46325e3a012b2372bd44cf21231"
+    },
+    {
+      "id": "VS-LR-32",
+      "nodes": [
+        "tests/visible/batch-15/test_vs_legacy_record_classification.py::test_vs_lr_32_record_covers_options_probes"
+      ],
+      "source_sha256": "51aa6b54bc300a0406d85720257a85fd2e90e46325e3a012b2372bd44cf21231"
+    }
+  ],
+  "legacy_baseline": "Separate original regression inventory; preserve original history and apply ruled successors.",
+  "not_required": [
+    {
+      "id": "VS-AD-01",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-AD-02",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-RN-01",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-02",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-03",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-04",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-05",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-06",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-07",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-08",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-09",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-10",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RN-11",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-SM-01",
+      "status": "ADVISORY"
+    },
+    {
+      "id": "VS-SM-02",
+      "status": "ADVISORY"
+    },
+    {
+      "id": "VS-SM-03",
+      "status": "ADVISORY"
+    },
+    {
+      "id": "VS-CL-01",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-CL-03",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-CL-04",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-CL-05",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RC-01",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-RC-07",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-01",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-02",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-03",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-04",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-05",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-06",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-07",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-08",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-RC-11",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-RC-12",
+      "status": "PROPOSED"
+    },
+    {
+      "id": "VS-FX-11",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-FX-14",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-FX-15",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-02",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-03",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-09",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-10",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-27",
+      "status": "INVALID"
+    },
+    {
+      "id": "VS-LR-30",
+      "status": "INVALID"
+    }
+  ],
+  "proof": [
+    {
+      "id": "VS-RC-02",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_02_conversion_records_are_complete_and_verified"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-03",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_03_protocols_reference_their_conversion_records"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-04",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_04_every_conversion_has_a_passing_sanity_record"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-05",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_05_every_target_protocol_has_both_verification_records"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-06",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_06_every_target_has_a_smoke_run_with_prompt_hashes"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-08",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_08_proof_runs_show_interruption_and_pause_recovery"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    },
+    {
+      "id": "VS-RC-09",
+      "nodes": [
+        "tests/visible/batch-09/test_vs_records.py::test_vs_rc_09_runner_state_keeps_its_hashes"
+      ],
+      "source_sha256": "a8e65e1d460b5774450599321409f6236af7d470b47890e51f40f2d71a33f493"
+    }
+  ]
+}
